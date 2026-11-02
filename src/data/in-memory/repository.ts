@@ -1,0 +1,4087 @@
+import { fieldValueForMilestone, milestoneStateForField, timelineSyncForField, timelineSyncForMilestone, BID_SYSTEM_FIELDS, BID_TRACKER_MASTER_KEYS, bidSystemField, fieldsUsingMaster, isBidTrackerMasterKey, parseMultiValue, resolveSystemOptions, withSystemOptions, type BidOptionLookups } from '@goms/domain'
+import { buildBidTrackerMasters, requirementsFromGeneral } from '@/modules/commercial-calculator/seed-defaults'
+import { MAX_CREDENTIAL_PASSPHRASES, normalizeCredentialPassphrase, type CredentialPassphrase, type CredentialPassphraseInput, type CredentialPassphraseUpdate } from '@goms/domain'
+import { BID_LEGACY_AUDIT_FIELD, validateBidTransfer, scaleBidAmount, generalToDocument, type BidImportTable, type BidImportPreview, type BidImportResult, type BidTransferContext, type PreparedBidImport } from '@goms/domain'
+import { competitionNames, computeInsights, insightValueCr, type InsightsFilters, type InsightsData } from '@goms/domain'
+import type { ReadinessRow, RoleOverrideRow } from '../../../apps/api/src/routers/access'
+import type {
+  ActionQueueEntry, AttendeeRef, Bid, BidCorrigendum, BidCorrigendumChange, BidCustomField, BidCustomFieldValue,
+  BidDocument, BidGridRow, BidMilestone, BidMilestoneWithBid, CustomFieldType, CustomValue,
+  BidSavedView, Charge, Customer, DeliveryTeamKey, DeliveryTeamMember, Domain, DocumentCitation, Employee, FollowUp, HierNode, MergeAuditRecord, WhatsAppLink, AddWhatsAppLinkInput, WhatsAppTag,
+  MergeFieldResolution, Opportunity, OpportunityStageChange, OwnershipAssignment, PreferredComm, ProtectedValue,
+  RelationshipQuality, RelationshipStatus,
+  SalesPerson, SalesPosting, SearchResult, Status, TimelineEvent, TimelineEventType, Transfer, VisitingCardItem,
+} from '@/lib/types'
+import type { MyAccess } from '../../../apps/api/src/routers/auth'
+import type { EffectivePermissions, OverrideHistoryFilter, OverrideHistoryRow, PermissionMatrix, UnmatchedOverride } from '../accessTypes'
+import { uid } from '@/lib/utils'
+import { PROTECTED_VALUES_ENFORCED, documentToGeneral, updateGeneralDocument, validateSynopsisDocument, type BidSynopsis, type BidSynopsisSection, type SaveBidSynopsisInput } from '@goms/domain'
+import { downloadName, MIME_FOR_FILE_TYPE, type MakerDocument, type MakerDocumentKind, type MakerDriveStatus, type MakerPermission, type MakerShare, type MakerVersion } from '@goms/domain'
+import {
+  base64ToBytes, createLocal, duplicateLocal, LOCAL_OWNER, renameLocal, replaceLocal, requireLocal, toPublic, uploadLocal,
+  type LocalMakerDocument, type MakerDownload, type MakerOwner, MakerSharingUnavailable,
+} from './makerDocuments'
+import { assertUniqueTenderWebsiteName, normalizeTenderWebsiteInput, tenderWebsiteKind, type TenderWebsite, type TenderWebsiteInput, type TenderWebsiteKind, type TenderDscEmployee } from '@goms/domain'
+import type { Competitor, CompetitorInput } from '@goms/domain'
+import type { AmnexDepartment } from '@goms/domain'
+import { allocateDirectoryNumber, employeeNumberClash, ensureCategoryRanges, parseEmployeeNumber } from '@goms/domain'
+import { bidStageChangeError } from '@goms/domain'
+import { assertLifecycleMove, furthestLifecycleSheet, validateLifecycleData, CUSTOM_FIELD_TYPES, customTypesCompatible, convertCustomFieldValue, isIsoDateOrTime, type UpdateBidCustomFieldPatch } from '@goms/domain'
+import { EMPLOYEE_CATEGORY } from '@/data/directoryNumbers'
+import {
+  createDepartmentLocal, deleteDepartmentLocal, listDepartmentsLocal, renameDepartmentLocal, reorderDepartmentsLocal, seedDepartments,
+} from './amnexDepartments'
+import { cloneCompetitor, createCompetitorLocal, deleteCompetitorLocal, listCompetitorsLocal, updateCompetitorLocal } from './competitors'
+import type { InsightCorrigendumRow, InsightReport, InsightReportInput, InsightVisual, InsightVisualInput } from '@goms/domain'
+import * as studioLocal from './insightsStudio'
+import type {
+  ApplyTemplateInput, RbacCustomRole, RbacGrantChange, RbacMyAccess, RbacNode, RbacRoleInput, RbacSubjectConfig, RbacSubjectRef, RbacSubjects,
+  RbacSyncResult, RbacTemplateInput, RbacLinkableRef,
+} from '@goms/domain'
+import * as rbacLocal from './rbacTree'
+import { isoToday } from '@/lib/dates'
+import { NODE_TYPE_MAP, POSTING_TYPES, childTypesOf, isValidChildType } from '@/lib/node-types'
+import {
+  MERGEABLE_FIELDS, type MergeableField,
+  DEFAULT_STAGE_KEY, PIPELINE_STAGE_MAP,
+  buildOwnerMap, effectiveOwner, OWNABLE_ENTITY_MAP,
+  type OwnerResolution, type OwnershipContext,
+  performSearch, performRelatedRecords, type SearchData, planPostingDatesEdit, type PostingDatesEdit,
+  ENTITY_FIELD_TYPES, hasOptions, DEFAULT_BID_STAGE_KEY, formatBidCode, isAtOrAfterSubmitted, computeAttentionFlag, applyFilterRules,
+  SYSTEM_BID_VIEWS, SYSTEM_BID_VIEW_KEYS, type SystemBidViewFilterRule,
+  coerceCustomValue, normalizeOptions, slugifyFieldKey,
+  DEPARTMENT_REQUIRED_MESSAGE, type DepartmentChoice, type NewBidOpportunity,
+  allocateOpportunityCode, opportunityCodeParts,
+  DEFAULT_OWNED_SHEET, isOwnedSheet, type OwnedSheet,
+  assertPeopleColumnId, isEmptyPeopleColumnConfig, normalizePeopleColumnConfig, type PeopleColumnConfig,
+} from '@goms/domain'
+export { MERGEABLE_FIELDS, type MergeableField }
+import { coversDate } from '@/lib/intervals'
+import { tierRank } from '../sales-tiers'
+import { buildSeed, type GormsData } from '../seed'
+import { managerProblem, reportsBrokenByLevel, syncAllTeamsFromOrg, type OrgPerson } from '../org-structure'
+import { opportunityCodeInputFor } from '../opportunityCodes'
+import { clearSnapshot, loadSnapshot, scheduleSave, syncWithOtherTabs } from '../persist'
+import {
+  addBoqLineItemLogic, createBoqLogic, createBomItemLogic, createMasterLogic, createSkuLogic,
+  deleteBomItemLogic, deleteBoqLogic, deleteMasterLogic, deleteSkuLogic, duplicateBoqLogic, getBoqLogic, getMasterLogic, getSkuLogic,
+  listAllBomItemsLogic, listAllBoqLineItemsLogic, listAuditLogsLogic, listBoqLineItemsLogic, listBoqsLogic,
+  listBomItemsForSkuLogic, listEditionFeaturesLogic,
+  listMasterLogic, listSkusLogic, removeBoqLineItemLogic, reorderBoqLineItemsLogic, reviseBoqLogic, setEditionFeaturesLogic,
+  setMasterActiveLogic, updateBoqLineItemLogic, updateBoqLogic, updateBoqStatusLogic, updateBomItemLogic, updateMasterLogic,
+  updateSkuLogic, writeAuditLogEntry,
+} from '@/modules/commercial-calculator/repository-logic'
+import type {
+  BoqStatus, CommercialAuditLog, CommercialBoq, CommercialBoqLineItem, CommercialBomItem, CommercialSku,
+  CreateBoqInput, CreateBoqLineItemInput, CreateBomItemInput, CreateMasterInput, CreateSkuInput, MasterEntityKey,
+  MasterRowMap, ProductEditionFeature, UpdateBoqInput,
+} from '@/modules/commercial-calculator/types'
+import {
+  changeDetails, normalizeChange, normalizeRegister, patchRegister,
+  type AddCorrigendumChangesInput, type CreateCorrigendumInput, type UpdateCorrigendumRegisterInput,
+} from '@/modules/bid-tracker/corrigenda/model'
+import { normalizeDocumentFiling, type DocumentBatch, type DocumentCategory } from '@goms/domain'
+
+export interface StateSummary {
+  code: number
+  name: string
+  departments: number
+  offices: number
+  employees: number
+}
+
+export interface InteractionSummary {
+  employeeId: string
+  name: string
+  type: TimelineEventType
+  title: string
+  date: string
+}
+
+/** Aggregate relationship metrics powering the analytics dashboard. */
+export interface RelationshipAnalytics {
+  total: number
+  connected: number
+  notConnected: number
+  vacant: number
+  transfers: number
+  highPriority: number
+  qualityDist: Record<RelationshipQuality, number>
+  statusDist: Record<RelationshipStatus, number>
+  recentInteractions: InteractionSummary[]
+  /** Logged `meeting`/`inPerson` entries dated after today, soonest first. */
+  upcomingMeetings: InteractionSummary[]
+}
+
+export interface CreateNodeInput {
+  domain: Domain
+  typeKey: string
+  parentId: string | null
+  stateCode: number | null
+  name: string
+  metadata?: Record<string, string>
+}
+
+export interface CreateEmployeeInput {
+  name: string
+  designation: string
+  email: string
+  phone: string
+  photoUrl?: string | null
+  company?: string
+  address?: string
+  website?: string
+  orgNodeId: string
+  managerId: string | null
+  vacant?: boolean
+  connected?: boolean
+  relationshipStatus?: RelationshipStatus
+  relationshipQuality?: RelationshipQuality
+  relationshipType?: string
+  introducedBy?: string
+  importantContact?: boolean
+  preferredComm?: PreferredComm[]
+  lastInteractionAt?: string | null
+  followUpDate?: string | null
+  notes?: string
+  charges?: Charge[]
+  /** A card scanned during creation, if any — attached from the start rather
+   *  than requiring a separate post-create upload step. */
+  visitingCards?: VisitingCardItem[]
+  metadata?: Record<string, string>
+}
+
+export interface CreateCustomerInput {
+  name: string
+  organization?: string
+  address?: string
+  gst?: string
+  contactName?: string
+  contactEmail?: string
+  contactPhone?: string
+  notes?: string
+}
+
+export interface AddTimelineInput {
+  employeeId: string
+  type: TimelineEventType
+  title: string
+  customLabel?: string
+  date: string
+  time?: string
+  note?: string
+  attendees?: AttendeeRef[]
+  agenda?: string
+  outcome?: string
+  nextSteps?: string
+}
+
+export interface ImportChildRow {
+  name: string
+  /** Child type label (e.g. "Office", "Division") matched case-insensitively
+   *  against the parent's valid child types — falls back to the parent's
+   *  first child type (prior single-type-per-import behavior) when blank or
+   *  unrecognized. */
+  type?: string
+}
+
+export interface ImportEmployeeRow {
+  name: string
+  designation: string
+  email?: string
+  phone?: string
+  connected?: boolean
+}
+
+export interface MergeEmployeesInput {
+  /** The record that stays. */
+  survivorId: string
+  /** The record that's absorbed and deleted. */
+  duplicateId: string
+  /** Explicit picks for fields where both records had a different, non-empty
+   *  value — anything left out here keeps the survivor's own value if it has
+   *  one, else auto-fills from the duplicate. */
+  resolutions: Partial<Pick<Employee, MergeableField>>
+}
+
+export interface TransferInput {
+  employeeId: string
+  toOrgNodeId: string
+  toDesignation: string
+  /** New reporting manager after the transfer. `undefined` leaves the manager
+   *  unchanged; `null` clears it (top of chain). */
+  toManagerId?: string | null
+  effectiveDate: string
+  reason: string
+  remarks?: string
+}
+
+export interface CreateOpportunityInput {
+  departmentId: string
+  opportunityName: string
+  gemTenderId?: string
+  city?: string | null
+  referenceNo?: string | null
+  assignmentName?: string | null
+  publishDate?: string
+  submissionDate?: string
+  vertical?: string
+  /** One of OPPORTUNITY_TYPES; defaults to '' (not set). */
+  opportunityType?: string
+  component?: string[]
+  quantity?: string
+  currency?: string
+  valueAmount?: string
+  valueUnit?: string
+  budgetKnown?: string
+  emdAmount?: string
+  emdUnit?: string
+  salesPersonEmail?: string
+  geoSalesPersonId?: string | null
+  buSalesPersonId?: string | null
+  preSalesPersonId?: string | null
+  legalPersonId?: string | null
+  bidTeamMemberId?: string | null
+  /** Defaults to `DEFAULT_STAGE_KEY`. */
+  stageKey?: string
+}
+
+export interface CreateDeliveryTeamMemberInput {
+  team: DeliveryTeamKey
+  name: string
+  email?: string
+  designation?: string
+  managerId?: string | null
+}
+
+export type UpdateDeliveryTeamMemberPatch = Partial<Pick<DeliveryTeamMember, 'name' | 'email' | 'designation' | 'managerId'>>
+
+export interface CreateOrgPersonInput {
+  name: string
+  level: number
+  designation?: string
+  departments?: string[]
+  verticals?: string[]
+  managerId?: string | null
+  email?: string
+  photoUrl?: string | null
+}
+export type UpdateOrgPersonPatch = Partial<Pick<OrgPerson, 'name' | 'designation' | 'level' | 'departments' | 'verticals' | 'managerId' | 'email' | 'status' | 'photoUrl' | 'employeeNumber'>>
+
+export interface CreateSalesPersonInput {
+  name: string
+  officialEmail: string
+  personalEmail?: string
+  mobile?: string
+  altMobile?: string
+  photoUrl?: string | null
+  notes?: string
+  /** Initial posting — a person is created WITH a posting, never without one;
+   *  a posting-less person can't appear correctly in the org chart or reports. */
+  designation: string
+  tierKey: string
+  managerId?: string | null
+}
+
+export interface TransferSalesPersonInput {
+  salesPersonId: string
+  designation: string
+  tierKey: string
+  managerId?: string | null
+  office?: string
+  effectiveDate: string
+  reason?: string
+}
+
+export interface TransferBookOfBusinessInput {
+  fromSalesPersonId: string
+  toSalesPersonId: string
+  effectiveDate: string
+  note?: string
+}
+
+export interface AssignOwnerInput {
+  entityType: string
+  entityId: string
+  salesPersonId: string
+  /** 'owner' replaces the current open owner; 'delegate' runs in parallel and
+   *  MUST carry an endDate (spec §6.4). */
+  role?: string
+  startDate: string
+  endDate?: string | null
+  reason?: OwnershipAssignment['reason']
+  note?: string
+}
+
+export interface CreateFollowUpInput {
+  entityType: string
+  entityId: string
+  dueDate: string
+  note?: string
+  /** → `SalesPerson.id`. Always null until the Roster phase. */
+  assigneeId?: string | null
+}
+
+/** All persistence flows through this interface. The in-memory implementation
+ *  below can be replaced by a Supabase-backed one with no UI changes. */
+export interface SetRoleOverrideInput { email: string; role: string; effect: 'grant' | 'revoke'; reason: string }
+
+export interface Repository {
+  getInsights(filters: InsightsFilters): Promise<InsightsData>
+  /** The caller's roles and roster facts (RBAC). The local store has no server: RBAC is off. */
+  getMyAccess(): Promise<MyAccess>
+  /** Role & Access Management (RBAC). The local store has no server and no roles, so these are empty no-ops. */
+  getAccessReadiness(): Promise<ReadinessRow[]>
+  listRoleOverrides(): Promise<RoleOverrideRow[]>
+  setRoleOverride(input: SetRoleOverrideInput): Promise<void>
+  removeRoleOverride(id: string): Promise<void>
+  /** Overrides whose email matches no person row; only a System Admin can remove one. */
+  listUnmatchedOverrides(): Promise<UnmatchedOverride[]>
+  /** The audit trail of override changes, newest first, optionally for one email / role. */
+  listOverrideHistory(filter?: OverrideHistoryFilter): Promise<OverrideHistoryRow[]>
+  /** The role x module matrix, computed by the server from the same policy it enforces. */
+  getPermissionMatrix(): Promise<PermissionMatrix>
+  /** What one person can do per module, computed by the server (never in the browser). */
+  getEffectivePermissions(email: string): Promise<EffectivePermissions>
+  listStates(): Promise<StateSummary[]>
+  getState(code: number): Promise<HierNode | undefined>
+  getNode(id: string): Promise<HierNode | undefined>
+  listChildren(parentId: string): Promise<HierNode[]>
+  listOrgRoots(stateCode: number): Promise<HierNode[]>
+  /** Every active department node across every state — powers the export,
+   *  which is cross-state (unlike `listOrgRoots`, which is per-state). */
+  listDepartments(): Promise<HierNode[]>
+  listPostingNodes(stateCode: number): Promise<HierNode[]>
+  breadcrumb(id: string): Promise<HierNode[]>
+  childCount(id: string): Promise<number>
+  /** The country node — the root of the geography hierarchy. */
+  geoRoot(): Promise<HierNode | undefined>
+  /** Number of active children for each active child of `parentId`, in one pass
+   *  (e.g. districts-per-state) — powers the geography explorer's counts. */
+  childCounts(parentId: string): Promise<Record<string, number>>
+
+  createNode(input: CreateNodeInput): Promise<HierNode>
+  updateNode(id: string, patch: Partial<Pick<HierNode, 'name' | 'metadata'>>): Promise<HierNode>
+  setNodeStatus(id: string, status: Status): Promise<void>
+  deleteNode(id: string): Promise<void>
+  moveNode(id: string, newParentId: string | null): Promise<void>
+  duplicateNode(id: string): Promise<HierNode>
+
+  listEmployeesUnder(orgNodeId: string): Promise<Employee[]>
+  listEmployeesDirect(orgNodeId: string): Promise<Employee[]>
+  listEmployeesByState(stateCode: number): Promise<Employee[]>
+  listAllEmployees(): Promise<Employee[]>
+  /** Map of active employee id → the department node they sit under (if any).
+   *  Powers the Directory's Department filter without walking the tree per row. */
+  listEmployeeDepartments(): Promise<Record<string, { id: string; name: string }>>
+  getEmployee(id: string): Promise<Employee | null>
+  directReports(employeeId: string): Promise<Employee[]>
+  reportingChain(employeeId: string): Promise<Employee[]>
+  createEmployee(input: CreateEmployeeInput): Promise<Employee>
+  updateEmployee(id: string, patch: Partial<Employee>): Promise<Employee>
+  setManager(employeeId: string, managerId: string | null): Promise<void>
+  deleteEmployee(id: string): Promise<void>
+  /** Merges `duplicateId` into `survivorId`: reassigns every timeline event,
+   *  transfer, direct report, and department headship pointing at the
+   *  duplicate over to the survivor, combines list fields, applies the
+   *  caller's field resolutions, deletes the duplicate, and appends one
+   *  `MergeAuditRecord`. Never automatic — always an explicit user action. */
+  mergeEmployees(input: MergeEmployeesInput): Promise<{ survivor: Employee; audit: MergeAuditRecord }>
+  /** Every past merge, newest first — the only place a merged-away record's
+   *  identity and what happened to it survive for later review. */
+  listMergeAudit(): Promise<MergeAuditRecord[]>
+
+  listTimeline(employeeId: string): Promise<TimelineEvent[]>
+  /** Every timeline event across every employee, newest first — powers the
+   *  cross-employee Meetings & Events screen. Optionally narrowed to a set of
+   *  event types. */
+  listAllTimelineEvents(filter?: { types?: TimelineEventType[] }): Promise<TimelineEvent[]>
+  addTimelineEvent(input: AddTimelineInput): Promise<TimelineEvent>
+  /** Item 14: edits an existing entry's fields in place (same id, no new
+   *  row) — date/time/title/attendees/agenda/note/outcome/nextSteps. */
+  updateTimelineEvent(id: string, patch: Partial<TimelineEvent>): Promise<TimelineEvent>
+  /** Marks (or un-marks) attendance on an existing entry — the only field
+   *  editable after logging. */
+  setTimelineEventAttended(id: string, attended: boolean | undefined): Promise<void>
+  deleteTimelineEvent(id: string): Promise<void>
+
+  listTransfers(employeeId: string): Promise<Transfer[]>
+  transferEmployee(input: TransferInput): Promise<Transfer>
+
+  /** Every opportunity across every department, newest first. */
+  listOpportunities(): Promise<Opportunity[]>
+  listOpportunitiesByDepartment(departmentId: string): Promise<Opportunity[]>
+  getOpportunity(id: string): Promise<Opportunity | null>
+  /** Append-only stage history for one opportunity, oldest first. */
+  listOpportunityStageChanges(opportunityId: string): Promise<OpportunityStageChange[]>
+  createOpportunity(input: CreateOpportunityInput): Promise<Opportunity>
+  updateOpportunity(id: string, patch: Partial<Opportunity>): Promise<Opportunity>
+  deleteOpportunity(id: string): Promise<void>
+
+  listDeliveryTeamMembers(team?: DeliveryTeamKey): Promise<DeliveryTeamMember[]>
+  createDeliveryTeamMember(input: CreateDeliveryTeamMemberInput): Promise<DeliveryTeamMember>
+  updateDeliveryTeamMember(id: string, patch: UpdateDeliveryTeamMemberPatch): Promise<DeliveryTeamMember>
+  setDeliveryTeamMemberStatus(id: string, status: 'active' | 'inactive'): Promise<void>
+  deleteDeliveryTeamMember(id: string): Promise<void>
+  listOrgPeople(): Promise<OrgPerson[]>
+  createOrgPerson(input: CreateOrgPersonInput): Promise<OrgPerson>
+  updateOrgPerson(id: string, patch: UpdateOrgPersonPatch): Promise<OrgPerson>
+  deleteOrgPerson(id: string): Promise<void>
+
+  /** The AMNEX sales roster, name-sorted. Includes every status — the UI
+   *  filters, so a resigned person stays reachable from their history. */
+  listSalesPersons(): Promise<SalesPerson[]>
+  getSalesPerson(id: string): Promise<SalesPerson | null>
+  /** Postings for one person, most recent first. */
+  listSalesPostings(salesPersonId: string): Promise<SalesPosting[]>
+  /** Each person's currently-open posting, keyed by person id — one pass, so a
+   *  roster list can show designation and tier without a query per row. */
+  currentPostings(): Promise<Record<string, SalesPosting>>
+
+  /** Every ownership/delegation row, newest start first. */
+  listOwnershipAssignments(): Promise<OwnershipAssignment[]>
+  /** Rows touching one entity, including closed ones — this is its history. */
+  listOwnershipFor(entityType: string, entityId: string): Promise<OwnershipAssignment[]>
+  /** Everything one person owns or is delegated, open rows only at `asOf`. */
+  listOwnedBy(salesPersonId: string, asOf: string): Promise<OwnershipAssignment[]>
+  createSalesPerson(input: CreateSalesPersonInput): Promise<SalesPerson>
+  updateSalesPerson(id: string, patch: Partial<SalesPerson>): Promise<SalesPerson>
+  setSalesPersonStatus(id: string, status: SalesPerson['status']): Promise<void>
+  deleteSalesPerson(id: string): Promise<void>
+  transferSalesPerson(input: TransferSalesPersonInput): Promise<SalesPosting>
+  /** In-place manager/GM-override change on the currently-open posting —
+   *  distinct from `transferSalesPerson`, which closes the current posting
+   *  and opens a new one. Does not touch designation/tier/start-end
+   *  dates/changeType. `patch` only updates the keys it includes — omit a
+   *  key to leave it untouched (e.g. changing just `gmOverrideId` without
+   *  touching `managerId`). */
+  updatePostingManager(personId: string, patch: { managerId?: string | null; gmOverrideId?: string | null }): Promise<SalesPosting>
+  /** Edits a posting's Effective from / Effective to. `lastDayHeld` is the
+   *  last day actually held (inclusive; stored as an exclusive end); `null`
+   *  means Present. Setting one on the open posting ENDS it. Boundary rules —
+   *  contiguity, no overlap — are `planPostingDatesEdit`'s (shared with the API). */
+  updatePostingDates(postingId: string, edit: PostingDatesEdit): Promise<SalesPosting>
+  /** Who effectively owns this entity — direct, or inherited from an ancestor. */
+  resolveOwner(entityType: string, entityId: string, asOf: string): Promise<OwnerResolution | null>
+  /** Batch form. Use this for lists: the per-entity call re-walks the ancestor
+   *  chain for every row, which §13 names the design's largest perf risk. */
+  resolveOwners(entityType: string, entityIds: string[], asOf: string): Promise<Record<string, OwnerResolution>>
+  /** Assigns an owner, closing any existing open owner on the same entity as of
+   *  `startDate`. Rejects rather than warns on a bad write — see spec §8. */
+  assignOwner(input: AssignOwnerInput): Promise<OwnershipAssignment>
+  /** Closes an open assignment as of `endDate` (exclusive). */
+  endOwnership(id: string, endDate: string): Promise<void>
+  /** Reassigns every entity `fromSalesPersonId` currently owns (departments,
+   *  contacts, opportunities) to `toSalesPersonId` in one operation — the
+   *  handoff needed when someone goes on indefinite leave or resigns, so
+   *  their book of business doesn't sit orphaned. */
+  transferBookOfBusiness(input: TransferBookOfBusinessInput): Promise<OwnershipAssignment[]>
+
+  /** Follow-ups against one entity, soonest due first. */
+  listFollowUps(entityType: string, entityId: string): Promise<FollowUp[]>
+  /** Every open follow-up across every entity, soonest due first. */
+  listOpenFollowUps(): Promise<FollowUp[]>
+  createFollowUp(input: CreateFollowUpInput): Promise<FollowUp>
+  setFollowUpStatus(id: string, status: FollowUp['status']): Promise<void>
+  deleteFollowUp(id: string): Promise<void>
+
+  /** WhatsApp messages filed to an opportunity, newest message first. */
+  listWhatsAppLinks(opportunityId?: string): Promise<WhatsAppLink[]>
+  /** Files a message to an opportunity; filing the same message there again returns the existing entry (`created: false`). */
+  addWhatsAppLink(input: AddWhatsAppLinkInput): Promise<{ link: WhatsAppLink; created: boolean }>
+  removeWhatsAppLink(id: string): Promise<void>
+  /** Corrects a filed message (sender resolved later, a file copy kept on first open, who filed it). */
+  updateWhatsAppLink(id: string, patch: Partial<Pick<WhatsAppLink, 'senderName' | 'senderPhone' | 'body' | 'addedBy' | 'file'>>): Promise<void>
+  /** Tags on WhatsApp chats, by name. */
+  listWhatsAppTags(): Promise<WhatsAppTag[]>
+  /** The first time only (no tags were ever saved): starts the tags from the phone's own WhatsApp lists. Later calls do nothing. */
+  importWhatsAppTags(lists: Omit<WhatsAppTag, 'id'>[]): Promise<void>
+  /** A new tag; a name that already exists (any case) returns that tag. */
+  createWhatsAppTag(name: string): Promise<WhatsAppTag>
+  setWhatsAppTagChat(tagId: string, chatId: string, tagged: boolean): Promise<void>
+
+  addCharge(employeeId: string, charge: Omit<Charge, 'id'>): Promise<Charge>
+  removeCharge(employeeId: string, chargeId: string): Promise<void>
+
+  search(query: string, stateCode?: number): Promise<SearchResult[]>
+  relatedRecords(result: SearchResult): Promise<SearchResult[]>
+  importChildren(parentId: string, rows: ImportChildRow[]): Promise<number>
+  importEmployees(orgNodeId: string, rows: ImportEmployeeRow[]): Promise<number>
+  moveTargets(nodeId: string): Promise<HierNode[]>
+  reorderNode(id: string, beforeId: string | null): Promise<void>
+  relationshipAnalytics(): Promise<RelationshipAnalytics>
+
+  // --- Customers (new in Phase 2, spec §6) -----------------------------------
+  listCustomers(): Promise<Customer[]>
+  getCustomer(id: string): Promise<Customer | null>
+  createCustomer(input: CreateCustomerInput): Promise<Customer>
+  updateCustomer(id: string, patch: Partial<Customer>): Promise<Customer>
+  deleteCustomer(id: string): Promise<void>
+
+  // --- Commercial Calculator: generic master CRUD (thin delegation) ------
+  // Real logic lives in src/modules/commercial-calculator/repository-logic.ts.
+  // Spec §4.2.
+  listMaster<K extends MasterEntityKey>(key: K): Promise<MasterRowMap[K][]>
+  getMaster<K extends MasterEntityKey>(key: K, id: string): Promise<MasterRowMap[K] | null>
+  createMaster<K extends MasterEntityKey>(key: K, input: CreateMasterInput<K>): Promise<MasterRowMap[K]>
+  /** `changeReason` is required when `patch` changes a `features` row's
+   *  `status` — throws otherwise (spec §15). */
+  updateMaster<K extends MasterEntityKey>(key: K, id: string, patch: Partial<MasterRowMap[K]>, changeReason?: string): Promise<MasterRowMap[K]>
+  setMasterActive(key: MasterEntityKey, id: string, active: boolean): Promise<void>
+  /** Throws if any other master row still references this one — e.g.
+   *  deleting a Vertical that still has Products. */
+  deleteMaster(key: MasterEntityKey, id: string): Promise<void>
+
+  // --- Commercial Calculator: Product Edition ↔ Feature mapping (spec §6.2) --
+  listEditionFeatures(editionId: string): Promise<ProductEditionFeature[]>
+  setEditionFeatures(editionId: string, rows: { featureId: string; mandatory: boolean }[]): Promise<void>
+
+  // --- Commercial Calculator: SKU Catalog (thin delegation, spec §6.3/§7/§14) -
+  listSkus(): Promise<CommercialSku[]>
+  getSku(id: string): Promise<CommercialSku | null>
+  createSku(input: CreateSkuInput): Promise<CommercialSku>
+  /** `changeReason` is required when `patch` touches lifecycle status, cost,
+   *  or pricing fields — throws otherwise (spec §15). */
+  updateSku(id: string, patch: Partial<CommercialSku>, changeReason?: string): Promise<CommercialSku>
+  /** Throws if any BOQ line item or BOM item still references this SKU (PCS-038). */
+  deleteSku(id: string): Promise<void>
+
+  // --- Commercial Calculator: Commercial BOM (spec §6.4/§14) -----------------
+  listBomItemsForSku(parentSkuId: string): Promise<CommercialBomItem[]>
+  /** Every BOM item across every parent SKU — read-only aggregate for the SKU
+   *  Catalog's "Usage Count" column. */
+  listAllBomItems(): Promise<CommercialBomItem[]>
+  createBomItem(input: CreateBomItemInput): Promise<CommercialBomItem>
+  updateBomItem(id: string, patch: Partial<CommercialBomItem>): Promise<CommercialBomItem>
+  deleteBomItem(id: string): Promise<void>
+
+  // --- Commercial Calculator: BOQ (spec §6.5/§9/§10/§12/§13) -----------------
+  listBoqs(): Promise<CommercialBoq[]>
+  getBoq(id: string): Promise<CommercialBoq | null>
+  listBoqLineItems(boqId: string): Promise<CommercialBoqLineItem[]>
+  /** Every BOQ line item across every BOQ — read-only aggregate for the SKU
+   *  Catalog's "BOQ Count" column. */
+  listAllBoqLineItems(): Promise<CommercialBoqLineItem[]>
+  createBoq(input: CreateBoqInput): Promise<CommercialBoq>
+  /** BOQ-level metadata patch — throws unless `status === 'draft'` (BOQ
+   *  editable-workspace overhaul spec §3). */
+  updateBoq(id: string, patch: UpdateBoqInput): Promise<CommercialBoq>
+  addBoqLineItem(boqId: string, input: CreateBoqLineItemInput): Promise<CommercialBoqLineItem>
+  updateBoqLineItem(
+    id: string,
+    patch: Partial<Pick<CommercialBoqLineItem,
+      'quantity' | 'unitPrice' | 'discountPct' | 'approverId' | 'approvalDate' | 'approvalRemarks' | 'approvalStatus'
+      | 'pricingLevels' | 'activePricingLevel'
+    >>,
+  ): Promise<CommercialBoqLineItem>
+  removeBoqLineItem(id: string): Promise<void>
+  /** Reorders a draft BOQ's line items — `orderedIds` must be exactly this
+   *  BOQ's current line item ids, each exactly once, in the desired order.
+   *  Throws unless `status === 'draft'` (BOQ workbench spec §6). */
+  reorderBoqLineItems(boqId: string, orderedIds: string[]): Promise<void>
+  /** Throws on an invalid lifecycle transition (spec §10's `BOQ_TRANSITIONS`). */
+  updateBoqStatus(id: string, nextStatus: BoqStatus, changeReason: string): Promise<CommercialBoq>
+  /** Creates a new BOQ row carrying the same `boqNumber` forward, with
+   *  `boqVersion` incremented and its line items copied (spec §9/§13). */
+  reviseBoq(id: string): Promise<CommercialBoq>
+  /** Creates an independent new BOQ — fresh `boqNumber`, `status: 'draft'`,
+   *  `boqVersion: 1`, no `parentBoqId` — copying this BOQ's fields and line
+   *  items as a starting point. Distinct from `reviseBoq`, which keeps the
+   *  same `boqNumber` and links back via `parentBoqId`: a duplicate is a new,
+   *  unrelated proposal. */
+  duplicateBoq(id: string): Promise<CommercialBoq>
+  /** Hard-deletes a BOQ and its line items. Throws unless the BOQ is
+   *  `draft`/`cancelled`/`rejected`/`archived` — anything still active in
+   *  the pipeline must be cancelled first via `updateBoqStatus`. */
+  deleteBoq(id: string): Promise<void>
+
+  // --- Commercial Calculator: Audit Log (spec §6.6/§15) ----------------------
+  listAuditLogs(filter?: { entityType?: string; entityId?: string }): Promise<CommercialAuditLog[]>
+
+  // --- Live Bids ---
+  listBidsForGrid(filterRules?: SystemBidViewFilterRule[]): Promise<BidGridRow[]>
+  getBid(id: string): Promise<Bid | null>
+  getBidForOpportunity(opportunityId: string): Promise<Bid | null>
+  /** `sheet`: the Opportunity sheet the new row lives in (default Live Bids). */
+  createBid(opportunityId: string, department?: DepartmentChoice, sheet?: OwnedSheet): Promise<Bid>
+  /** Create Bid for an opportunity that does not exist yet: the opportunity, its department and the bid
+   *  are created together (all-or-nothing), exactly as bids.create does server-side. */
+  createBidForNewOpportunity(opportunity: NewBidOpportunity, department: DepartmentChoice, sheet?: OwnedSheet): Promise<Bid>
+  previewBidImport(input: { table: BidImportTable }): Promise<BidImportPreview>
+  importBids(input: { table: BidImportTable }): Promise<BidImportResult>
+  /** `sheet` moves the row to another Opportunity sheet. */
+  updateBid(id: string, patch: Partial<Pick<Bid, 'stageKey' | 'decision' | 'tenderLink' | 'sheet' | 'lifecycleData'>>): Promise<Bid>
+  archiveBid(id: string): Promise<Bid>
+  markBidVerified(id: string): Promise<Bid>
+  unarchiveBid(id: string): Promise<Bid>
+  deleteBid(id: string): Promise<void>
+  listBidActionQueue(): Promise<ActionQueueEntry[]>
+  getBidSynopsis(bidId: string, section: BidSynopsisSection): Promise<BidSynopsis | null>
+  saveBidSynopsis(input: SaveBidSynopsisInput): Promise<BidSynopsis>
+
+  /** Document maker (personal Office files). `owner` is used only by the local store; the API takes the signed-in user. */
+  listMakerDocuments(): Promise<MakerDocument[]>
+  createMakerDocument(input: { kind: MakerDocumentKind; title: string; owner?: MakerOwner }): Promise<MakerDocument>
+  uploadMakerDocument(input: { name: string; data: string; owner?: MakerOwner }): Promise<MakerDocument>
+  replaceMakerDocument(id: string, name: string, data: string): Promise<MakerDocument>
+  renameMakerDocument(id: string, title: string): Promise<MakerDocument>
+  duplicateMakerDocument(id: string): Promise<MakerDocument>
+  deleteMakerDocument(id: string): Promise<void>
+  getMakerDownload(id: string): Promise<MakerDownload>
+  /** Sharing and version history need the server: one browser's local store has no other users. */
+  listMakerShareDirectory(): Promise<{ email: string; name: string }[]>
+  listMakerShares(id: string): Promise<MakerShare[]>
+  shareMakerDocument(id: string, email: string, permissions: MakerPermission[]): Promise<MakerShare[]>
+  unshareMakerDocument(id: string, email: string): Promise<MakerShare[]>
+  listMakerVersions(id: string): Promise<MakerVersion[]>
+  getMakerVersionDownload(id: string, version: number): Promise<MakerDownload>
+  /** A WebDAV session for an installed Office app; `url` is absolute. */
+  openMakerDesktopSession(id: string): Promise<{ url: string; write: boolean }>
+  /** Upload of the caller's own files to their Google Drive. */
+  getMakerDriveStatus(): Promise<MakerDriveStatus>
+  connectMakerDrive(): Promise<{ url: string }>
+  disconnectMakerDrive(): Promise<void>
+
+  /** Tender portals managed in Settings, offered in a bid's General tab. */
+  /** Websites on one Settings page; defaults to the tender portals. */
+  listCredentialPassphrases(): Promise<CredentialPassphrase[]>
+  createCredentialPassphrase(input: CredentialPassphraseInput): Promise<CredentialPassphrase>
+  updateCredentialPassphrase(input: CredentialPassphraseUpdate): Promise<CredentialPassphrase>
+  deleteCredentialPassphrase(id: string): Promise<void>
+  listTenderWebsites(kind?: TenderWebsiteKind): Promise<TenderWebsite[]>
+  listTenderDscEmployees(): Promise<TenderDscEmployee[]>
+  createTenderWebsite(input: TenderWebsiteInput): Promise<TenderWebsite>
+  updateTenderWebsite(id: string, input: TenderWebsiteInput): Promise<TenderWebsite>
+  setTenderWebsiteEditingLock(id: string, locked: boolean): Promise<TenderWebsite>
+  deleteTenderWebsite(id: string): Promise<void>
+  /** Rival companies managed in Settings > Competitors, sorted by name. */
+  listCompetitors(): Promise<Competitor[]>
+  createCompetitor(input: CompetitorInput): Promise<Competitor>
+  updateCompetitor(id: string, input: CompetitorInput): Promise<Competitor>
+  deleteCompetitor(id: string): Promise<void>
+  /** Insights Studio: saved visuals and reports (own + shared), and the corrigendum register across all bids. */
+  listInsightVisuals(): Promise<InsightVisual[]>
+  createInsightVisual(input: InsightVisualInput): Promise<InsightVisual>
+  updateInsightVisual(id: string, input: InsightVisualInput): Promise<InsightVisual>
+  deleteInsightVisual(id: string): Promise<void>
+  listInsightReports(): Promise<InsightReport[]>
+  createInsightReport(input: InsightReportInput): Promise<InsightReport>
+  updateInsightReport(id: string, input: InsightReportInput): Promise<InsightReport>
+  deleteInsightReport(id: string): Promise<void>
+  listInsightCorrigenda(): Promise<InsightCorrigendumRow[]>
+  /** Settings > Masters > Amnex Departments, in display order, each with its employee count. */
+  listAmnexDepartments(): Promise<AmnexDepartment[]>
+  createAmnexDepartment(name: string): Promise<AmnexDepartment>
+  /** Custom departments only; also renames it on every employee who has it. */
+  renameAmnexDepartment(id: string, name: string): Promise<AmnexDepartment>
+  reorderAmnexDepartments(ids: string[]): Promise<AmnexDepartment[]>
+  /** Custom departments only; also removes it from every employee who has it. */
+  deleteAmnexDepartment(id: string): Promise<{ removedFromEmployees: number }>
+  /** Settings > Roles & Access (UI permission tree). `localEmail` is used only by the local store (no server). */
+  getRbacMyAccess(localEmail: string | null): Promise<RbacMyAccess>
+  listRbacNodes(): Promise<RbacNode[]>
+  syncRbacNodes(): Promise<RbacSyncResult>
+  getRbacSubjects(): Promise<RbacSubjects>
+  getRbacConfig(subject: RbacSubjectRef): Promise<RbacSubjectConfig>
+  setRbacConfig(subject: RbacSubjectRef, changes: RbacGrantChange[]): Promise<void>
+  createRbacRole(input: RbacRoleInput): Promise<RbacCustomRole>
+  updateRbacRole(id: string, input: RbacRoleInput): Promise<void>
+  deleteRbacRole(id: string): Promise<void>
+  createRbacTemplate(input: RbacTemplateInput): Promise<{ id: string }>
+  updateRbacTemplate(id: string, input: { name: string; description?: string }): Promise<void>
+  duplicateRbacTemplate(id: string): Promise<{ id: string }>
+  deleteRbacTemplate(id: string): Promise<void>
+  applyRbacTemplate(input: ApplyTemplateInput): Promise<void>
+  unlinkRbacTemplate(subject: RbacLinkableRef): Promise<void>
+
+  listBidMilestones(bidId: string): Promise<BidMilestone[]>
+  listAllBidMilestones(): Promise<BidMilestoneWithBid[]>
+  createBidMilestone(input: {
+    bidId: string; milestoneType: string; key: string; label: string
+    dueAt?: string | null; venue?: string; notes?: string
+  }): Promise<BidMilestone>
+  updateBidMilestone(id: string, patch: Partial<Pick<BidMilestone, 'label' | 'dueAt' | 'venue' | 'notes' | 'status'>>): Promise<BidMilestone>
+  deleteBidMilestone(id: string): Promise<void>
+
+  listBidCorrigenda(bidId: string): Promise<BidCorrigendum[]>
+  createBidCorrigendum(input: CreateCorrigendumInput): Promise<BidCorrigendum>
+  /** Edits the register fields only — changes are append-only and never rewritten. */
+  updateBidCorrigendumRegister(input: UpdateCorrigendumRegisterInput): Promise<BidCorrigendum>
+  reviewCorrigendumChange(input: { changeId: string; decision: 'accepted' | 'rejected'; reason?: string }): Promise<BidCorrigendumChange>
+  /** Appends clause changes to an existing corrigendum — earlier rows are never rewritten. */
+  addCorrigendumChanges(input: AddCorrigendumChangesInput): Promise<BidCorrigendum>
+
+  listProtectedValues(entityType: string, entityId: string): Promise<ProtectedValue[]>
+  freezeValue(entityType: string, entityId: string, fieldKey: string): Promise<void>
+  unfreezeValue(entityType: string, entityId: string, fieldKey: string, reason: string): Promise<void>
+
+  requestDocumentUploadUrl(input: {
+    entityType: string; entityId: string; filename: string; contentType: string; sizeBytes: number; version?: string
+    batch?: DocumentBatch; category?: DocumentCategory
+  }): Promise<{ uploadId: string; uploadUrl: string }>
+  confirmDocumentUpload(uploadId: string): Promise<BidDocument>
+  /** Re-files a document into another attachment batch/category. */
+  updateDocumentFiling(input: { id: string; batch: DocumentBatch; category: DocumentCategory }): Promise<BidDocument>
+  listDocuments(entityType: string, entityId: string): Promise<BidDocument[]>
+  deleteDocument(id: string): Promise<void>
+  getDocumentDownloadUrl(id: string): Promise<string>
+  listDocumentCitations(documentId: string): Promise<DocumentCitation[]>
+  deleteDocumentCitation(id: string): Promise<void>
+  createDocumentCitation(input: { documentId: string; pageLabel: string; quoteText?: string; fieldRef?: string }): Promise<DocumentCitation>
+
+  listBidSavedViews(): Promise<BidSavedView[]>
+  createBidSavedView(input: {
+    name: string; scope: 'personal' | 'global'; sheet?: string
+    filterRules?: SystemBidViewFilterRule[]; sort?: unknown[]; visibleColumns?: string[]
+  }): Promise<BidSavedView>
+  updateBidSavedView(id: string, patch: Partial<Pick<BidSavedView, 'name' | 'filterRules' | 'sort' | 'visibleColumns'>>): Promise<BidSavedView>
+  deleteBidSavedView(id: string): Promise<void>
+
+  // --- Live Bids: custom columns (spec §8.1) ---
+  listBidCustomFields(includeArchived?: boolean): Promise<BidCustomField[]>
+  createBidCustomField(input: { name: string; dataType: CustomFieldType; options?: string[]; sheet?: BidCustomField['sheet'] }): Promise<BidCustomField>
+  /** Keys stay fixed; type changes migrate compatible values or explicitly reset unrelated values. */
+  updateBidCustomField(id: string, patch: UpdateBidCustomFieldPatch): Promise<BidCustomField>
+  /** `ids` must be exactly the current active column ids, each once. */
+  reorderBidCustomFields(ids: string[]): Promise<BidCustomField[]>
+  archiveBidCustomField(id: string): Promise<BidCustomField>
+  unarchiveBidCustomField(id: string): Promise<BidCustomField>
+  /** Throws while any value row exists — archive instead. */
+  deleteBidCustomField(id: string, withValues?: boolean): Promise<void>
+  /** `null`/blank clears (removes the value row). */
+  setBidCustomValue(
+    bidId: string, fieldId: string, value: string | number | boolean | null,
+  ): Promise<{ bidId: string; fieldId: string; key: string; value: CustomValue }>
+  listBidCustomValues(bidId: string): Promise<Record<string, CustomValue>>
+  /** Live Bids › Manage columns › People columns: each person column's dropdown setup, by column id. */
+  listPeopleColumnConfigs(): Promise<Record<string, PeopleColumnConfig>>
+  /** Saves one column's setup; `null` (or an empty setup) removes it, so the column offers its default list again. */
+  setPeopleColumnConfig(columnId: string, config: PeopleColumnConfig | null): Promise<void>
+}
+
+// Re-exported (not redefined) so existing `@/data/repository` import sites
+// keep working while the implementation lives in the date module.
+export { isoToday } from '@/lib/dates'
+
+/** Local-dev-only bid-code sequence — no cross-session durability guarantee
+ *  beyond what IndexedDB already gives the rest of this file (spec §6). */
+let inMemoryBidSeq = 1
+
+/** Upload slots handed out by `requestDocumentUploadUrl`, awaiting confirm. */
+const pendingBidUploads = new Map<string, {
+  entityType: string; entityId: string; filename: string; contentType: string; sizeBytes: number; version?: string
+  batch?: DocumentBatch; category?: DocumentCategory
+}>()
+
+/** Same allow-list and limit the API enforces (apps/api/src/lib/gcs.ts). */
+const LOCAL_DOCUMENT_TYPES = [
+  'application/pdf', 'image/jpeg', 'image/png',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]
+const LOCAL_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024
+
+/** A stored document with its filing defaulted (rows saved before batches existed). */
+const withFiling = (doc: BidDocument): BidDocument => ({ ...doc, ...normalizeDocumentFiling(doc.batch, doc.category) })
+
+/** A bid's sheet must be one it can live in (never 'master', never a typo). */
+function assertOwnedSheet(sheet: unknown): asserts sheet is OwnedSheet {
+  if (!isOwnedSheet(sheet)) throw new Error(`Unknown sheet: ${String(sheet)}`)
+}
+
+/** Parses opportunities.submissionDate the same way the backend's
+ *  `bids.create` does (spec §4.5) — null for anything that doesn't parse. */
+function parseSubmissionDate(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const parsed = new Date(raw)
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
+}
+
+class InMemoryRepository implements Repository {
+  async getMyAccess(): Promise<MyAccess> { return { mode: 'off', email: null, roles: [], facts: null } }
+  async getAccessReadiness(): Promise<ReadinessRow[]> { return [] }
+  async listRoleOverrides(): Promise<RoleOverrideRow[]> { return [] }
+  async setRoleOverride(): Promise<void> {}
+  async removeRoleOverride(): Promise<void> {}
+  async listUnmatchedOverrides(): Promise<UnmatchedOverride[]> { return [] }
+  async listOverrideHistory(): Promise<OverrideHistoryRow[]> { return [] }
+  // No server, no policy: an empty matrix (the screen shows its empty state) and a person with no permissions.
+  async getPermissionMatrix(): Promise<PermissionMatrix> { return { roles: [], modules: [], grants: {}, fieldSets: {}, restrictions: [] } as unknown as PermissionMatrix }
+  async getEffectivePermissions(email: string): Promise<EffectivePermissions> { return { email, roles: [], systemAdmin: false, modules: [], notes: [] } }
+
+  private data: GormsData = buildSeed()
+
+  constructor() {
+    // Collapse any duplicate same-name branches under the same parent.
+    this.dedupeBranches()
+    this.ensureBidTrackerDefaults()
+  }
+
+  /** Built-in Live Bids fields and their masters (packages/domain/src/bidTrackerFields.ts), added to a
+   *  store that predates them. Mirrors migration 1791765200000: an existing column of the same name wins. */
+  private ensureBidTrackerDefaults() {
+    const masters = this.data.commercialCalculator?.masters as Record<string, unknown> | undefined
+    if (masters) {
+      const defaults = buildBidTrackerMasters()
+      for (const key of BID_TRACKER_MASTER_KEYS) if (!Array.isArray(masters[key])) masters[key] = defaults[key]
+    }
+    const fields = this.data.bidCustomFields ?? (this.data.bidCustomFields = [])
+    const now = new Date().toISOString()
+    for (const f of BID_SYSTEM_FIELDS) {
+      if (fields.some(x => x.key === f.key || (x.status === 'active' && x.name.trim().toLowerCase() === f.name.toLowerCase()))) continue
+      const live = f.dataType === 'select' || f.dataType === 'multiselect'
+      fields.push({ id: uid('bcf'), key: f.key, name: f.name, dataType: f.dataType, sheet: 'bidTracker', options: live ? [] : null, hasHeldValue: false,
+        position: fields.reduce((m, x) => Math.max(m, x.position + 1), 0), status: 'active', createdBy: 'system', updatedBy: null, createdAt: now, updatedAt: now })
+    }
+  }
+
+  /** Live option sources for the built-in Live Bids fields (same as apps/api/src/lib/bidOptionLookups.ts). */
+  private bidOptionLookups(): BidOptionLookups {
+    const masters: BidOptionLookups['masters'] = {}
+    for (const key of BID_TRACKER_MASTER_KEYS) {
+      masters[key] = listMasterLogic(this.data.commercialCalculator, key).filter(r => r.active)
+        .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name)).map(r => ({ name: r.name, description: r.description }))
+    }
+    return {
+      masters,
+      competitors: (this.data.competitors ?? []).map(c => c.name).sort((a, b) => a.localeCompare(b)),
+      preSales: this.data.deliveryTeamMembers.filter(p => p.team === 'preSales' && p.status === 'active').map(p => p.name).sort((a, b) => a.localeCompare(b)),
+    }
+  }
+
+  /** Replaces the whole store — used to restore the locally persisted snapshot
+   *  at startup, and to reset back to seed data. Not part of `Repository`: it's
+   *  an implementation detail of the in-memory store, and a server-backed
+   *  implementation would have no use for it. */
+  hydrate(data: GormsData) {
+    // Defensive against a snapshot that predates these collections but is
+    // already stamped at the current SCHEMA_VERSION (so migrateSnapshot runs
+    // no steps for it) — without this, every opportunity/followUp method
+    // throws on `undefined.slice()`/`.push()` the first time it's called.
+    this.data = {
+      ...data,
+      opportunities: data.opportunities ?? [],
+      opportunityStageChanges: data.opportunityStageChanges ?? [],
+      opportunityCodeSequences: data.opportunityCodeSequences ?? {},
+      followUps: data.followUps ?? [],
+      salesPersons: data.salesPersons ?? [],
+      salesPostings: data.salesPostings ?? [],
+      deliveryTeamMembers: data.deliveryTeamMembers ?? [],
+      orgPeople: data.orgPeople ?? [],
+      ownershipAssignments: data.ownershipAssignments ?? [],
+      bids: data.bids ?? [],
+      bidSynopsis: data.bidSynopsis ?? [],
+      makerDocuments: data.makerDocuments ?? [],
+      bidMilestones: data.bidMilestones ?? [],
+      bidCorrigenda: data.bidCorrigenda ?? [],
+      bidCorrigendumChanges: data.bidCorrigendumChanges ?? [],
+      protectedValues: data.protectedValues ?? [],
+      bidDocuments: data.bidDocuments ?? [],
+      documentCitations: data.documentCitations ?? [],
+      bidSavedViews: data.bidSavedViews ?? [],
+      bidCustomFields: data.bidCustomFields ?? [],
+      bidCustomFieldValues: data.bidCustomFieldValues ?? [],
+      // Websites saved before Settings had a verification page are tender portals.
+      credentialPassphrases: data.credentialPassphrases ?? [],
+      tenderWebsites: (data.tenderWebsites ?? []).map(site => ({ ...site, kind: tenderWebsiteKind(site) })),
+      competitors: data.competitors ?? [],
+      amnexDepartments: data.amnexDepartments ?? seedDepartments(data.orgPeople ?? []),
+      rbacTree: data.rbacTree ?? rbacLocal.emptyRbacState(),
+    }
+    // `mergeAudit` postdates some locally persisted snapshots (the static
+    // type says it's always there, but a snapshot saved before this field
+    // existed won't actually have it) — default it rather than let every
+    // push/read on it throw for those users.
+    if (!Array.isArray(this.data.mergeAudit)) this.data.mergeAudit = []
+    const reachedByBid = new Map<string, OwnedSheet>()
+    for (const entry of this.data.commercialCalculator?.commercialAuditLogs ?? []) {
+      if (entry.entityType !== 'bid' || entry.field !== 'sheet') continue
+      for (const value of [entry.oldValue, entry.newValue]) if (isOwnedSheet(value)) reachedByBid.set(entry.entityId, furthestLifecycleSheet(value, reachedByBid.get(entry.entityId)))
+    }
+    for (const bid of this.data.bids) bid.lifecycleReachedSheet = furthestLifecycleSheet(bid.sheet ?? DEFAULT_OWNED_SHEET, bid.lifecycleReachedSheet, reachedByBid.get(bid.id) ?? bid.sheet ?? DEFAULT_OWNED_SHEET)
+    // Settings > Masters > Live Bids > Bid Stages postdates saved snapshots: seed the built-in stages.
+    const masters = this.data.commercialCalculator?.masters as Record<string, unknown> | undefined
+    if (masters && !Array.isArray(masters.bidStages)) masters.bidStages = buildBidTrackerMasters().bidStages
+    // Requirement (formerly Scope of Work) now picks from a master: its saved lines become the first entries.
+    if (masters && !Array.isArray(masters.requirements)) {
+      masters.requirements = requirementsFromGeneral(this.data.bidSynopsis.filter(s => s.section === 'general').map(s => documentToGeneral(s.document)))
+    }
+    // A snapshot written by an older build can still carry duplicates that
+    // today's seed no longer produces, so re-run the same cleanup the seed gets.
+    this.dedupeBranches()
+  }
+
+  /** The live store, for persisting. Returned by reference (not cloned): the
+   *  caller hands it straight to IndexedDB, which structured-clones it during
+   *  the write anyway. */
+  snapshot(): GormsData {
+    return this.data
+  }
+
+  /** Collapse branches that share a name under the same parent, reassigning the
+   *  duplicates' children to the kept branch. Keeps the hierarchy clean. */
+  private dedupeBranches() {
+    const byParent = new Map<string, HierNode[]>()
+    for (const n of this.data.nodes) {
+      if (n.typeKey !== 'branch' || !n.parentId) continue
+      const arr = byParent.get(n.parentId) ?? []
+      arr.push(n)
+      byParent.set(n.parentId, arr)
+    }
+    const removeIds = new Set<string>()
+    for (const branches of byParent.values()) {
+      const seen = new Map<string, HierNode>()
+      for (const b of branches) {
+        const key = b.name.trim().toLowerCase()
+        const keep = seen.get(key)
+        if (keep) {
+          for (const child of this.data.nodes) {
+            if (child.parentId === b.id) child.parentId = keep.id
+          }
+          removeIds.add(b.id)
+        } else {
+          seen.set(key, b)
+        }
+      }
+    }
+    if (removeIds.size) this.data.nodes = this.data.nodes.filter((n) => !removeIds.has(n.id))
+  }
+
+  private activeChildren(parentId: string): HierNode[] {
+    return this.data.nodes
+      .filter((n) => n.parentId === parentId && n.status === 'active')
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
+  }
+
+  private subtreeIds(id: string): string[] {
+    const out = [id]
+    const stack = [id]
+    while (stack.length) {
+      const cur = stack.pop()!
+      for (const n of this.data.nodes) {
+        if (n.parentId === cur) {
+          out.push(n.id)
+          stack.push(n.id)
+        }
+      }
+    }
+    return out
+  }
+
+  async listStates(): Promise<StateSummary[]> {
+    const states = this.data.nodes.filter((n) => n.typeKey === 'state')
+    return states
+      .map((s) => {
+        const code = s.stateCode!
+        const orgUnder = this.data.nodes.filter((n) => n.domain === 'org' && n.stateCode === code)
+        return {
+          code,
+          name: s.name,
+          departments: orgUnder.filter((n) => n.typeKey === 'department').length,
+          offices: orgUnder.filter((n) => n.typeKey === 'office').length,
+          employees: this.data.employees.filter((e) =>
+            e.status === 'active' && !e.vacant && orgUnder.some((n) => n.id === e.orgNodeId),
+          ).length,
+        }
+      })
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  async getState(code: number) {
+    return this.data.nodes.find((n) => n.typeKey === 'state' && n.stateCode === code)
+  }
+
+  async getNode(id: string) {
+    return this.data.nodes.find((n) => n.id === id)
+  }
+
+  async listChildren(parentId: string) {
+    return this.activeChildren(parentId)
+  }
+
+  async listOrgRoots(stateCode: number) {
+    return this.data.nodes
+      .filter((n) => n.domain === 'org' && n.typeKey === 'department' && n.parentId === null && n.stateCode === stateCode && n.status === 'active')
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+  }
+
+  async listDepartments() {
+    return this.data.nodes
+      .filter((n) => n.domain === 'org' && n.typeKey === 'department' && n.status === 'active')
+      .sort((a, b) => (a.stateCode ?? 0) - (b.stateCode ?? 0) || a.name.localeCompare(b.name))
+  }
+
+  /** Org nodes an employee can be posted at (offices/units) in a state — used
+   *  as transfer targets. */
+  async listPostingNodes(stateCode: number) {
+    return this.data.nodes
+      .filter((n) => n.domain === 'org' && POSTING_TYPES.has(n.typeKey) && n.stateCode === stateCode && n.status === 'active')
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  async breadcrumb(id: string) {
+    const chain: HierNode[] = []
+    let cur = this.data.nodes.find((n) => n.id === id)
+    while (cur) {
+      chain.unshift(cur)
+      cur = cur.parentId ? this.data.nodes.find((n) => n.id === cur!.parentId) : undefined
+    }
+    return chain
+  }
+
+  async childCount(id: string) {
+    return this.data.nodes.filter((n) => n.parentId === id && n.status === 'active').length
+  }
+
+  async geoRoot() {
+    return this.data.nodes.find((n) => n.typeKey === 'country')
+  }
+
+  async childCounts(parentId: string) {
+    const out: Record<string, number> = {}
+    for (const child of this.activeChildren(parentId)) {
+      out[child.id] = this.data.nodes.filter((n) => n.parentId === child.id && n.status === 'active').length
+    }
+    return out
+  }
+
+  async createNode(input: CreateNodeInput) {
+    if (input.parentId) {
+      const parent = this.data.nodes.find((n) => n.id === input.parentId)
+      if (parent && !isValidChildType(parent.typeKey, input.typeKey)) {
+        throw new Error(`A ${NODE_TYPE_MAP[input.typeKey]?.label ?? input.typeKey} cannot be created under a ${NODE_TYPE_MAP[parent.typeKey]?.label ?? parent.typeKey}`)
+      }
+    }
+    // Never create a second branch with the same name under one parent.
+    if (input.typeKey === 'branch' && input.parentId) {
+      const dup = this.activeChildren(input.parentId).find(
+        (c) => c.typeKey === 'branch' && c.name.trim().toLowerCase() === input.name.trim().toLowerCase(),
+      )
+      if (dup) return dup
+    }
+    const siblings = input.parentId ? this.activeChildren(input.parentId) : []
+    const node: HierNode = {
+      id: uid(input.domain),
+      domain: input.domain,
+      typeKey: input.typeKey,
+      parentId: input.parentId,
+      stateCode: input.stateCode,
+      name: input.name,
+      code: null,
+      sortOrder: siblings.length,
+      metadata: input.metadata ?? {},
+      status: 'active',
+    }
+    this.data.nodes.push(node)
+    return node
+  }
+
+  async updateNode(id: string, patch: Partial<Pick<HierNode, 'name' | 'metadata'>>) {
+    const node = this.data.nodes.find((n) => n.id === id)!
+    if (patch.name !== undefined) node.name = patch.name
+    if (patch.metadata !== undefined) node.metadata = patch.metadata
+    return node
+  }
+
+  async setNodeStatus(id: string, status: Status) {
+    for (const nid of this.subtreeIds(id)) {
+      const n = this.data.nodes.find((x) => x.id === nid)
+      if (n) n.status = status
+    }
+  }
+
+  async deleteNode(id: string) {
+    const ids = new Set(this.subtreeIds(id))
+    this.data.nodes = this.data.nodes.filter((n) => !ids.has(n.id))
+    this.data.employees = this.data.employees.filter((e) => !ids.has(e.orgNodeId))
+    // Opportunities used to live inside the node's own metadata, so they died
+    // with it automatically. Now they're a separate collection keyed by
+    // departmentId, so a node delete has to cascade to them explicitly —
+    // otherwise a deleted department's opportunities (and their stage
+    // history) would live on forever, unreachable from the tree.
+    const deletedOppIds = new Set(
+      this.data.opportunities.filter((o) => !!o.departmentId && ids.has(o.departmentId)).map((o) => o.id),
+    )
+    this.data.opportunities = this.data.opportunities.filter((o) => !o.departmentId || !ids.has(o.departmentId))
+    this.data.opportunityStageChanges = this.data.opportunityStageChanges
+      .filter((c) => !deletedOppIds.has(c.opportunityId))
+  }
+
+  async moveNode(id: string, newParentId: string | null) {
+    if (newParentId) {
+      if (this.subtreeIds(id).includes(newParentId)) {
+        throw new Error('Cannot move a node into its own subtree')
+      }
+      const node = this.data.nodes.find((n) => n.id === id)
+      const newParent = this.data.nodes.find((n) => n.id === newParentId)
+      if (node && newParent && !isValidChildType(newParent.typeKey, node.typeKey)) {
+        throw new Error(`A ${NODE_TYPE_MAP[node.typeKey]?.label ?? node.typeKey} cannot be moved under a ${NODE_TYPE_MAP[newParent.typeKey]?.label ?? newParent.typeKey}`)
+      }
+    }
+    const node = this.data.nodes.find((n) => n.id === id)!
+    node.parentId = newParentId
+  }
+
+  async duplicateNode(id: string) {
+    const original = this.data.nodes.find((n) => n.id === id)!
+    const idMap = new Map<string, string>()
+    const clones: HierNode[] = []
+    for (const oldId of this.subtreeIds(id)) {
+      const src = this.data.nodes.find((n) => n.id === oldId)!
+      const newId = uid(src.domain)
+      idMap.set(oldId, newId)
+      clones.push({ ...src, id: newId, metadata: { ...src.metadata } })
+    }
+    for (const clone of clones) {
+      if (clone.id === idMap.get(id)) {
+        clone.parentId = original.parentId
+        clone.name = `${original.name} (Copy)`
+      } else {
+        clone.parentId = idMap.get(clone.parentId!) ?? clone.parentId
+      }
+    }
+    this.data.nodes.push(...clones)
+    return this.data.nodes.find((n) => n.id === idMap.get(id))!
+  }
+
+  async listEmployeesUnder(orgNodeId: string) {
+    const ids = new Set(this.subtreeIds(orgNodeId))
+    return this.data.employees
+      .filter((e) => ids.has(e.orgNodeId) && e.status === 'active')
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  async listEmployeesDirect(orgNodeId: string) {
+    return this.data.employees
+      .filter((e) => e.orgNodeId === orgNodeId && e.status === 'active')
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  async listEmployeesByState(stateCode: number) {
+    const orgIds = new Set(
+      this.data.nodes.filter((n) => n.domain === 'org' && n.stateCode === stateCode).map((n) => n.id),
+    )
+    return this.data.employees
+      .filter((e) => orgIds.has(e.orgNodeId) && e.status === 'active')
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  async listAllEmployees() {
+    return this.data.employees
+      .filter((e) => e.status === 'active')
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  async listEmployeeDepartments() {
+    const byId = new Map(this.data.nodes.map((n) => [n.id, n] as const))
+    const deptOf = (nodeId: string): HierNode | undefined => {
+      let cur = byId.get(nodeId)
+      while (cur && cur.typeKey !== 'department') cur = cur.parentId ? byId.get(cur.parentId) : undefined
+      return cur
+    }
+    const out: Record<string, { id: string; name: string }> = {}
+    for (const e of this.data.employees) {
+      if (e.status !== 'active') continue
+      const dept = deptOf(e.orgNodeId)
+      if (dept) out[e.id] = { id: dept.id, name: dept.name }
+    }
+    return out
+  }
+
+  async getEmployee(id: string) {
+    // react-query's queryFn must never resolve to undefined (see useEmployee
+    // in api.ts) — a removed employee's id can still be in flight in a
+    // stale/invalidated query for a moment after deletion, so this must
+    // resolve to null, not undefined, once the record is gone.
+    return this.data.employees.find((e) => e.id === id) ?? null
+  }
+
+  async directReports(employeeId: string) {
+    return this.data.employees.filter((e) => e.managerId === employeeId && e.status === 'active')
+  }
+
+  async reportingChain(employeeId: string) {
+    const chain: Employee[] = []
+    let cur = this.data.employees.find((e) => e.id === employeeId)
+    while (cur?.managerId) {
+      const mgr = this.data.employees.find((e) => e.id === cur!.managerId)
+      if (!mgr) break
+      chain.unshift(mgr)
+      cur = mgr
+    }
+    return chain
+  }
+
+  async createEmployee(input: CreateEmployeeInput) {
+    const vacant = input.vacant ?? false
+    const emp: Employee = {
+      id: uid('emp'),
+      code: `EMP-NEW-${Math.floor(Math.random() * 9000 + 1000)}`,
+      directoryNumber: vacant ? null : this.nextDirectoryNumber(EMPLOYEE_CATEGORY),
+      name: input.name,
+      designation: input.designation,
+      email: input.email,
+      phone: input.phone,
+      company: input.company ?? '',
+      address: input.address ?? '',
+      website: input.website ?? '',
+      photoUrl: input.photoUrl ?? null,
+      orgNodeId: input.orgNodeId,
+      managerId: input.managerId,
+      vacant,
+      connected: vacant ? false : input.connected ?? true,
+      relationshipStatus: input.relationshipStatus ?? 'new',
+      relationshipQuality: input.relationshipQuality ?? 'neutral',
+      relationshipType: input.relationshipType ?? '',
+      introducedBy: input.introducedBy ?? '',
+      importantContact: input.importantContact ?? false,
+      preferredComm: input.preferredComm ?? [],
+      lastInteractionAt: input.lastInteractionAt ?? null,
+      followUpDate: input.followUpDate ?? null,
+      notes: input.notes ?? '',
+      charges: input.charges ?? [],
+      visitingCards: input.visitingCards ?? [],
+      metadata: input.metadata ?? {},
+      status: 'active',
+    }
+    this.data.employees.push(emp)
+    if (!vacant) {
+      this.data.timeline.push({
+        id: uid('evt'), employeeId: emp.id, type: 'joined',
+        title: 'Contact created', date: isoToday(),
+        note: '', source: 'system',
+      })
+    }
+    return emp
+  }
+
+  async updateEmployee(id: string, patch: Partial<Employee>) {
+    const emp = this.data.employees.find((e) => e.id === id)!
+    // The Directory ID is read-only; a vacant seat gets one when someone fills it.
+    const { directoryNumber: _readOnly, ...rest } = patch
+    const filled = emp.vacant && rest.vacant === false && emp.directoryNumber == null
+    Object.assign(emp, rest, filled ? { directoryNumber: this.nextDirectoryNumber(EMPLOYEE_CATEGORY) } : {})
+    return emp
+  }
+
+  /** Issues the next number in a category's range; the counter only moves forward, so numbers are never reused. */
+  private nextDirectoryNumber(categoryKey: string): number {
+    const range = this.data.directoryIdRanges.find((r) => r.categoryKey === categoryKey)
+    if (!range) throw new Error(`No Directory ID range exists for ${categoryKey}.`)
+    const { number, range: next } = allocateDirectoryNumber(range)
+    this.data.directoryIdRanges = this.data.directoryIdRanges.map((r) => (r === range ? next : r))
+    return number
+  }
+
+  /** Validates an Amnex employee number against every org and Sales record. '' / null clears it. */
+  private checkedEmployeeNumber(input: string | null | undefined, email: string, self: { orgId?: string; salesId?: string }): string | null {
+    if (!input?.trim()) return null
+    const number = parseEmployeeNumber(input)
+    if (!number) throw new Error('Enter the employee number as digits only, e.g. 1234.')
+    const holders = [
+      ...this.data.orgPeople.filter((p) => p.id !== self.orgId && p.employeeNumber).map((p) => ({ number: p.employeeNumber!, email: p.email, name: p.name })),
+      ...this.data.salesPersons.filter((p) => p.id !== self.salesId && p.employeeCode).map((p) => ({ number: p.employeeCode, email: p.officialEmail, name: p.name })),
+    ]
+    const clash = employeeNumberClash(number, email, holders)
+    if (clash) throw new Error(`Employee number ${number} already belongs to ${clash.name}.`)
+    return number
+  }
+
+  /** Reassign an employee's reporting manager, rejecting cycles (a person can't
+   *  end up reporting to one of their own subordinates). Used by drag-and-drop. */
+  async setManager(employeeId: string, managerId: string | null) {
+    if (employeeId === managerId) throw new Error('An employee cannot report to themselves')
+    const seen = new Set<string>()
+    let cur = managerId ? this.data.employees.find((e) => e.id === managerId) : null
+    while (cur) {
+      if (cur.id === employeeId) throw new Error('That would create a reporting cycle')
+      if (seen.has(cur.id)) break
+      seen.add(cur.id)
+      cur = cur.managerId ? this.data.employees.find((e) => e.id === cur!.managerId) : null
+    }
+    const emp = this.data.employees.find((e) => e.id === employeeId)!
+    emp.managerId = managerId
+  }
+
+  async deleteEmployee(id: string) {
+    // Looked up BEFORE the employee is removed from the array below — the
+    // previous version looked this up afterward, so `removed` was always
+    // undefined and every direct report's managerId was unconditionally set
+    // to null instead of falling back to the removed person's own manager,
+    // contradicting this function's own contract (matches
+    // apps/api/src/routers/employees.ts's `delete`, which reads manager_id
+    // before deleting for exactly this reason).
+    const removed = this.data.employees.find((e) => e.id === id)
+    this.data.employees = this.data.employees.filter((e) => e.id !== id)
+    this.data.timeline = this.data.timeline.filter((t) => t.employeeId !== id)
+    this.data.transfers = this.data.transfers.filter((t) => t.employeeId !== id)
+    this.data.followUps = this.data.followUps.filter((f) => !(f.entityType === 'contact' && f.entityId === id))
+    // Orphaned reports fall back to the removed person's manager.
+    for (const e of this.data.employees) {
+      if (e.managerId === id) e.managerId = removed?.managerId ?? null
+    }
+    // Clears a dangling deptHead pointer if the deleted employee headed a
+    // department — mergeEmployees (below) already does the equivalent
+    // reassignment for its own case; a plain delete has no replacement
+    // employee to reassign to, so the key is removed outright.
+    for (const n of this.data.nodes) {
+      if (n.metadata.deptHead === id) {
+        const { deptHead: _deptHead, ...rest } = n.metadata
+        n.metadata = rest
+      }
+    }
+  }
+
+  async mergeEmployees(input: MergeEmployeesInput) {
+    const survivor = this.data.employees.find((e) => e.id === input.survivorId)
+    const duplicate = this.data.employees.find((e) => e.id === input.duplicateId)
+    if (!survivor || !duplicate) throw new Error('Both records must exist to merge')
+    if (survivor.id === duplicate.id) throw new Error('Cannot merge a record with itself')
+
+    // Scalar fields: an explicit resolution wins outright; otherwise an empty
+    // survivor field is auto-filled from the duplicate. A field is only
+    // logged below when the merge actually changed something on the
+    // survivor — an untouched field (both sides agreed, or the survivor
+    // already had the only non-empty value) isn't merge activity.
+    const fieldResolutions: MergeFieldResolution[] = []
+    const patch: Record<string, unknown> = {}
+    for (const field of MERGEABLE_FIELDS) {
+      const resolved = input.resolutions[field]
+      if (resolved !== undefined) {
+        if (resolved !== survivor[field]) {
+          patch[field] = resolved
+          fieldResolutions.push({ field, kept: resolved === duplicate[field] ? 'duplicate' : 'survivor', value: String(resolved) })
+        }
+      } else if (!survivor[field] && duplicate[field]) {
+        patch[field] = duplicate[field]
+        fieldResolutions.push({ field, kept: 'duplicate', value: String(duplicate[field]) })
+      }
+    }
+    Object.assign(survivor, patch)
+
+    // List/derived fields: combined rather than replaced — a merge should
+    // never quietly drop relationship signal either side already had.
+    survivor.preferredComm = [...new Set([...survivor.preferredComm, ...duplicate.preferredComm])] as PreferredComm[]
+    const chargesMoved = duplicate.charges.length
+    survivor.charges = [...survivor.charges, ...duplicate.charges]
+    const visitingCardsMoved = duplicate.visitingCards.length
+    survivor.visitingCards = [...survivor.visitingCards, ...duplicate.visitingCards]
+    if (duplicate.lastInteractionAt && (!survivor.lastInteractionAt || duplicate.lastInteractionAt > survivor.lastInteractionAt)) {
+      survivor.lastInteractionAt = duplicate.lastInteractionAt
+    }
+    if (duplicate.followUpDate && (!survivor.followUpDate || duplicate.followUpDate < survivor.followUpDate)) {
+      survivor.followUpDate = duplicate.followUpDate
+    }
+    survivor.importantContact = survivor.importantContact || duplicate.importantContact
+    survivor.connected = survivor.connected || duplicate.connected
+
+    // Reassign every other record that pointed at the duplicate.
+    const timelineMoved = this.data.timeline.filter((t) => t.employeeId === duplicate.id).length
+    for (const t of this.data.timeline) if (t.employeeId === duplicate.id) t.employeeId = survivor.id
+
+    const transfersMoved = this.data.transfers.filter((t) => t.employeeId === duplicate.id).length
+    for (const t of this.data.transfers) if (t.employeeId === duplicate.id) t.employeeId = survivor.id
+
+    let directReportsMoved = 0
+    for (const e of this.data.employees) {
+      if (e.id === survivor.id || e.id === duplicate.id) continue
+      if (e.managerId === duplicate.id) { e.managerId = survivor.id; directReportsMoved += 1 }
+    }
+    // Either record may have reported to the other — that line no longer
+    // makes sense once they're the same record, so it collapses/clears
+    // rather than leaving a self-report or a dangling id.
+    if (survivor.managerId === duplicate.id) survivor.managerId = duplicate.managerId
+    if (survivor.managerId === survivor.id) survivor.managerId = null
+
+    let departmentHeadshipsMoved = 0
+    for (const n of this.data.nodes) {
+      if (n.metadata.deptHead === duplicate.id) {
+        n.metadata = { ...n.metadata, deptHead: survivor.id }
+        departmentHeadshipsMoved += 1
+      }
+    }
+
+    // Anyone manually flagged (metadata.duplicateOf) as a duplicate of the
+    // record being removed now points at the survivor instead — except the
+    // survivor itself, where that flag is simply resolved (it no longer
+    // means anything once the two are the same record).
+    for (const e of this.data.employees) {
+      if (e.metadata.duplicateOf !== duplicate.id) continue
+      const { duplicateOf: _drop, ...rest } = e.metadata
+      e.metadata = e.id === survivor.id ? rest : { ...rest, duplicateOf: survivor.id }
+    }
+
+    this.data.employees = this.data.employees.filter((e) => e.id !== duplicate.id)
+
+    const audit: MergeAuditRecord = {
+      id: uid('merge'),
+      survivorId: survivor.id,
+      survivorName: survivor.name,
+      duplicateId: duplicate.id,
+      duplicateName: duplicate.name,
+      mergedAt: new Date().toISOString(),
+      fieldResolutions,
+      transferred: {
+        timelineEvents: timelineMoved,
+        transfers: transfersMoved,
+        directReports: directReportsMoved,
+        departmentHeadships: departmentHeadshipsMoved,
+        visitingCards: visitingCardsMoved,
+        charges: chargesMoved,
+      },
+    }
+    this.data.mergeAudit.push(audit)
+    this.data.timeline.push({
+      id: uid('evt'), employeeId: survivor.id, type: 'custom',
+      customLabel: 'Merged duplicate',
+      title: `Merged duplicate contact "${duplicate.name || duplicate.designation}" into this record`,
+      date: isoToday(), note: '', source: 'system',
+    })
+
+    return { survivor, audit }
+  }
+
+  async listMergeAudit() {
+    return this.data.mergeAudit.slice().sort((a, b) => b.mergedAt.localeCompare(a.mergedAt))
+  }
+
+  async listTimeline(employeeId: string) {
+    return this.data.timeline
+      .filter((t) => t.employeeId === employeeId)
+      .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id))
+  }
+
+  async listAllTimelineEvents(filter?: { types?: TimelineEventType[] }) {
+    const types = filter?.types
+    let events = this.data.timeline
+    if (types && types.length > 0) {
+      const wanted = new Set(types)
+      events = events.filter((t) => wanted.has(t.type))
+    }
+    return events.slice().sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id))
+  }
+
+  async addTimelineEvent(input: AddTimelineInput) {
+    const evt: TimelineEvent = {
+      id: uid('evt'), employeeId: input.employeeId, type: input.type,
+      title: input.title, customLabel: input.type === 'custom' ? input.customLabel?.trim() || undefined : undefined,
+      date: input.date, time: input.time || undefined,
+      note: input.note ?? '', source: 'manual', attendees: input.attendees,
+      agenda: input.agenda || undefined, outcome: input.outcome || undefined, nextSteps: input.nextSteps || undefined,
+    }
+    this.data.timeline.push(evt)
+    return evt
+  }
+
+  async updateTimelineEvent(id: string, patch: Partial<TimelineEvent>) {
+    const evt = this.data.timeline.find((t) => t.id === id)!
+    Object.assign(evt, patch)
+    return evt
+  }
+
+  async setTimelineEventAttended(id: string, attended: boolean | undefined) {
+    const evt = this.data.timeline.find((t) => t.id === id)
+    if (evt) evt.attended = attended
+  }
+
+  async deleteTimelineEvent(id: string) {
+    this.data.timeline = this.data.timeline.filter((t) => t.id !== id)
+  }
+
+  async listTransfers(employeeId: string) {
+    return this.data.transfers
+      .filter((t) => t.employeeId === employeeId)
+      .sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate))
+  }
+
+  async transferEmployee(input: TransferInput) {
+    const emp = this.data.employees.find((e) => e.id === input.employeeId)!
+    const fromOffice = this.data.nodes.find((n) => n.id === emp.orgNodeId)
+    const toOffice = this.data.nodes.find((n) => n.id === input.toOrgNodeId)
+    const deptOf = (nodeId: string | undefined): HierNode | undefined => {
+      let cur = nodeId ? this.data.nodes.find((n) => n.id === nodeId) : undefined
+      while (cur && cur.typeKey !== 'department') {
+        cur = cur.parentId ? this.data.nodes.find((n) => n.id === cur!.parentId) : undefined
+      }
+      return cur
+    }
+    const managerName = (id: string | null) => (id ? this.data.employees.find((e) => e.id === id)?.name ?? '—' : '—')
+    const managerChanging = input.toManagerId !== undefined
+    const transfer: Transfer = {
+      id: uid('tr'), employeeId: emp.id,
+      fromDesignation: emp.designation, toDesignation: input.toDesignation || emp.designation,
+      fromDepartmentName: deptOf(emp.orgNodeId)?.name ?? '—',
+      toDepartmentName: deptOf(input.toOrgNodeId)?.name ?? '—',
+      fromOfficeName: fromOffice?.name ?? '—',
+      toOfficeName: toOffice?.name ?? '—',
+      toOrgNodeId: input.toOrgNodeId,
+      fromManagerName: managerName(emp.managerId),
+      toManagerName: managerChanging ? managerName(input.toManagerId!) : managerName(emp.managerId),
+      effectiveDate: input.effectiveDate, reason: input.reason, remarks: input.remarks ?? '',
+    }
+    this.data.transfers.push(transfer)
+    // Apply the posting change to the live record.
+    emp.orgNodeId = input.toOrgNodeId
+    if (input.toDesignation) emp.designation = input.toDesignation
+    // Reporting manager only changes when the caller explicitly set one —
+    // otherwise a posting move preserves the existing reporting line.
+    if (managerChanging) emp.managerId = input.toManagerId ?? null
+    this.data.timeline.push({
+      id: uid('evt'), employeeId: emp.id, type: 'transferred',
+      title: `Transferred to ${transfer.toOfficeName}`, date: input.effectiveDate,
+      note: input.reason, source: 'system',
+    })
+    return transfer
+  }
+
+  async listOpportunities() {
+    return this.data.opportunities
+      .slice()
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.opportunityName.localeCompare(b.opportunityName))
+  }
+
+  async listOpportunitiesByDepartment(departmentId: string) {
+    return this.data.opportunities
+      .filter((o) => o.departmentId === departmentId)
+      .sort((a, b) => a.opportunityName.localeCompare(b.opportunityName))
+  }
+
+  async getOpportunity(id: string) {
+    // null, not undefined — react-query rejects an undefined queryFn result,
+    // and a deleted id can still be in flight in a stale query.
+    return this.data.opportunities.find((o) => o.id === id) ?? null
+  }
+
+  async listOpportunityStageChanges(opportunityId: string) {
+    return this.data.opportunityStageChanges
+      .filter((c) => c.opportunityId === opportunityId)
+      .sort((a, b) => a.changedAt.localeCompare(b.changedAt) || a.id.localeCompare(b.id))
+  }
+
+  async createOpportunity(input: CreateOpportunityInput) {
+    this.assertOpportunityTeamAssignments(input)
+    const dept = this.data.nodes.find((n) => n.id === input.departmentId)
+    const stageKey = input.stageKey ?? DEFAULT_STAGE_KEY
+    const opp: Opportunity = {
+      id: uid('opp'),
+      opportunityCode: '', // assigned below, once the row is complete
+      departmentId: input.departmentId,
+      stateCode: dept?.stateCode ?? null,
+      stageKey,
+      closedOn: PIPELINE_STAGE_MAP[stageKey]?.isClosed ? isoToday() : null,
+      opportunityName: input.opportunityName,
+      gemTenderId: input.gemTenderId ?? '',
+      city: input.city ?? null,
+      referenceNo: input.referenceNo ?? null,
+      assignmentName: input.assignmentName ?? null,
+      publishDate: input.publishDate ?? '',
+      submissionDate: input.submissionDate ?? '',
+      vertical: input.vertical ?? '',
+      opportunityType: input.opportunityType ?? '',
+      component: input.component ?? [],
+      quantity: input.quantity ?? '',
+      currency: input.currency ?? 'INR',
+      valueAmount: input.valueAmount ?? '',
+      valueUnit: input.valueUnit ?? 'lakh',
+      budgetKnown: input.budgetKnown ?? '',
+      emdAmount: input.emdAmount ?? '',
+      emdUnit: input.emdUnit ?? 'lakh',
+      salesPersonEmail: input.salesPersonEmail ?? '',
+      geoSalesPersonId: input.geoSalesPersonId ?? null,
+      buSalesPersonId: input.buSalesPersonId ?? null,
+      preSalesPersonId: input.preSalesPersonId ?? null,
+      legalPersonId: input.legalPersonId ?? null,
+      bidTeamMemberId: input.bidTeamMemberId ?? null,
+      createdAt: isoToday(),
+      createdBy: null,
+    }
+    this.data.opportunities.push(opp)
+    this.assignOpportunityCode(opp)
+    // The opening row of the stage log. Migrated opportunities deliberately
+    // get none (their real history is unknown — see migrations.ts), so a
+    // missing opening row means "pre-existing", not "lost".
+    this.data.opportunityStageChanges.push({
+      id: uid('stg'), opportunityId: opp.id, fromStageKey: null, toStageKey: stageKey,
+      changedAt: opp.createdAt, changedBy: null, note: 'Opportunity created',
+    })
+    return opp
+  }
+
+  /** Gives a just-created opportunity its Opportunity ID from the per-FY
+   *  counter (skipping any number an existing code of that FY already uses).
+   *  No-op once it has one — the code is locked from creation on. JS runs
+   *  this synchronously, so two creates can never draw the same number. */
+  private assignOpportunityCode(opp: Opportunity) {
+    if (opp.opportunityCode) return
+    const allocated = allocateOpportunityCode(
+      opportunityCodeParts(opportunityCodeInputFor(opp, this.data.nodes)),
+      this.data.opportunityCodeSequences ?? {},
+      this.data.opportunities.map((o) => o.opportunityCode),
+    )
+    opp.opportunityCode = allocated.code
+    this.data.opportunityCodeSequences = allocated.sequences
+  }
+
+  async updateOpportunity(id: string, patch: Partial<Opportunity>) {
+    const opp = this.data.opportunities.find((o) => o.id === id)!
+    if ('opportunityCode' in patch && patch.opportunityCode !== opp.opportunityCode) {
+      throw new Error('The Opportunity ID is generated when the opportunity is created and cannot be changed.')
+    }
+    this.assertOpportunityTeamAssignments(patch)
+    const bidOfOpp = this.data.bids.find((b) => b.opportunityId === id)
+    if (bidOfOpp) this.assertNotProtected(bidOfOpp.id, (['valueAmount', 'emdAmount', 'gemTenderId'] as const).filter((f) => f in patch))
+    const previousStage = opp.stageKey
+    const historyFields = ['opportunityName', 'city', 'vertical', 'opportunityType', 'gemTenderId', 'referenceNo', 'assignmentName', 'stateCode'] as const
+    const before = new Map(historyFields.map(field => [field, opp[field]]))
+    Object.assign(opp, patch)
+    if (bidOfOpp) {
+      const general = this.data.bidSynopsis.find(section => section.bidId === bidOfOpp.id && section.section === 'general')
+      for (const [property, key] of [['gemTenderId', 'tenderId'], ['referenceNo', 'referenceNo'], ['assignmentName', 'assignmentName']] as const) {
+        if (general && patch[property] !== undefined) {
+          general.document = updateGeneralDocument(general.document, key, patch[property] ?? '')
+          general.revision += 1
+          general.updatedAt = new Date().toISOString()
+        }
+      }
+    }
+    // Inline grid edits are part of the bid's history (mirrors opportunities.update).
+    if (bidOfOpp) {
+      let changed = false
+      for (const f of historyFields) {
+        if (!(f in patch)) continue
+        const was = String(before.get(f) ?? ''); const now = String(opp[f] ?? '')
+        if (was === now) continue
+        changed = true
+        this.auditCustom({ entityType: 'bid', entityId: bidOfOpp.id, field: f, oldValue: was, newValue: now, action: 'update' })
+      }
+      if (changed) bidOfOpp.updatedAt = new Date().toISOString()
+    }
+    // A stage change is a logged event, not a silent field write — this log
+    // is the only way "what was the pipeline on <date>?" is ever answerable.
+    if (patch.stageKey !== undefined && patch.stageKey !== previousStage) {
+      const nowClosed = PIPELINE_STAGE_MAP[opp.stageKey]?.isClosed ?? false
+      opp.closedOn = nowClosed ? opp.closedOn ?? isoToday() : null
+      this.data.opportunityStageChanges.push({
+        id: uid('stg'), opportunityId: opp.id, fromStageKey: previousStage,
+        toStageKey: opp.stageKey, changedAt: isoToday(), changedBy: null, note: '',
+      })
+    }
+    return opp
+  }
+
+  private assertOpportunityTeamAssignments(patch: Partial<Opportunity>): void {
+    const salesAssignments = ['geoSalesPersonId', 'buSalesPersonId'] as const
+    for (const key of salesAssignments) {
+      const id = patch[key]
+      if (id && !this.data.salesPersons.some((person) => person.id === id)) {
+        throw new Error('Choose a person from the Sales team.')
+      }
+    }
+    const teamAssignments: [keyof Opportunity, DeliveryTeamKey][] = [
+      ['preSalesPersonId', 'preSales'], ['legalPersonId', 'legal'], ['bidTeamMemberId', 'bid'],
+    ]
+    for (const [key, team] of teamAssignments) {
+      const id = patch[key]
+      if (typeof id !== 'string' || !id) continue
+      if (!this.data.deliveryTeamMembers.some((member) => member.id === id && member.team === team && member.status === 'active')) {
+        throw new Error(`Choose an active person from the ${team} team.`)
+      }
+    }
+  }
+
+  async listDeliveryTeamMembers(team?: DeliveryTeamKey): Promise<DeliveryTeamMember[]> {
+    return this.data.deliveryTeamMembers
+      .filter((member) => !team || member.team === team)
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  async createDeliveryTeamMember(input: CreateDeliveryTeamMemberInput): Promise<DeliveryTeamMember> {
+    const name = input.name.trim()
+    const email = input.email?.trim() ?? ''
+    if (!name) throw new Error('Enter a team member name.')
+    if (this.data.deliveryTeamMembers.some((member) => member.team === input.team && member.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error('A person with this name is already on the team.')
+    }
+    const managerId = input.managerId || null
+    this.assertValidDeliveryManager(input.team, null, managerId)
+    const member: DeliveryTeamMember = {
+      id: uid('team'), team: input.team, name, email, designation: input.designation?.trim() ?? '', status: 'active', managerId, createdAt: isoToday(),
+    }
+    this.data.deliveryTeamMembers.push(member)
+    return member
+  }
+
+  async updateDeliveryTeamMember(id: string, patch: UpdateDeliveryTeamMemberPatch): Promise<DeliveryTeamMember> {
+    const member = this.data.deliveryTeamMembers.find((person) => person.id === id)
+    if (!member) throw new Error('Team member no longer exists.')
+    if (patch.managerId !== undefined) {
+      const managerId = patch.managerId || null
+      this.assertValidDeliveryManager(member.team, member.id, managerId)
+      member.managerId = managerId
+    }
+    if (patch.name !== undefined) member.name = patch.name.trim()
+    if (patch.email !== undefined) member.email = patch.email.trim()
+    if (patch.designation !== undefined) member.designation = patch.designation.trim()
+    return member
+  }
+
+  /** Reports-to must be someone on the same team, and must not make the chain circular. */
+  private assertValidDeliveryManager(team: DeliveryTeamKey, memberId: string | null, managerId: string | null) {
+    if (!managerId) return
+    const byId = new Map(this.data.deliveryTeamMembers.map((person) => [person.id, person]))
+    if (byId.get(managerId)?.team !== team) throw new Error('Choose a manager from the same team.')
+    for (let cursor: string | null = managerId; cursor; cursor = byId.get(cursor)?.managerId ?? null) {
+      if (cursor === memberId) throw new Error('That would make the reporting line circular.')
+    }
+  }
+
+  async setDeliveryTeamMemberStatus(id: string, status: DeliveryTeamMember['status']): Promise<void> {
+    const member = this.data.deliveryTeamMembers.find((person) => person.id === id)
+    if (member) member.status = status
+  }
+
+  async deleteDeliveryTeamMember(id: string): Promise<void> {
+    this.data.deliveryTeamMembers = this.data.deliveryTeamMembers
+      .filter((member) => member.id !== id)
+      .map((member) => (member.managerId === id ? { ...member, managerId: null } : member))
+    for (const opportunity of this.data.opportunities) {
+      if (opportunity.preSalesPersonId === id) opportunity.preSalesPersonId = null
+      if (opportunity.legalPersonId === id) opportunity.legalPersonId = null
+      if (opportunity.bidTeamMemberId === id) opportunity.bidTeamMemberId = null
+    }
+  }
+
+  // --- Amnex Departments master (logic in ./amnexDepartments; every change replaces the arrays) ---
+
+  private departmentState() {
+    if (!this.data.amnexDepartments) this.data.amnexDepartments = seedDepartments(this.data.orgPeople)
+    return { departments: this.data.amnexDepartments, people: this.data.orgPeople }
+  }
+
+  async listAmnexDepartments(): Promise<AmnexDepartment[]> {
+    return listDepartmentsLocal(this.departmentState())
+  }
+
+  async createAmnexDepartment(name: string): Promise<AmnexDepartment> {
+    const { departments, created } = createDepartmentLocal(this.departmentState().departments, name)
+    this.data.amnexDepartments = departments
+    return { ...created, employeeCount: 0 }
+  }
+
+  async renameAmnexDepartment(id: string, name: string): Promise<AmnexDepartment> {
+    const next = renameDepartmentLocal(this.departmentState(), id, name)
+    this.data.amnexDepartments = next.departments
+    this.data.orgPeople = next.people
+    const renamed = listDepartmentsLocal(this.departmentState()).find((d) => d.id === id)
+    if (!renamed) throw new Error('That department no longer exists.')
+    return renamed
+  }
+
+  async reorderAmnexDepartments(ids: string[]): Promise<AmnexDepartment[]> {
+    this.data.amnexDepartments = reorderDepartmentsLocal(this.departmentState().departments, ids)
+    return listDepartmentsLocal(this.departmentState())
+  }
+
+  async deleteAmnexDepartment(id: string): Promise<{ removedFromEmployees: number }> {
+    const next = deleteDepartmentLocal(this.departmentState(), id)
+    this.data.amnexDepartments = next.departments
+    this.data.orgPeople = next.people
+    return { removedFromEmployees: next.removedFromEmployees }
+  }
+
+  // --- Org Structure: the source of truth the delivery-team rosters derive from ---
+
+  async listOrgPeople(): Promise<OrgPerson[]> {
+    return [...this.data.orgPeople].sort((a, b) => a.level - b.level || a.name.localeCompare(b.name))
+  }
+
+  async createOrgPerson(input: CreateOrgPersonInput): Promise<OrgPerson> {
+    const name = input.name.trim()
+    if (!name) throw new Error('Enter the employee name.')
+    if (this.data.orgPeople.some((p) => p.name.trim().toLowerCase() === name.toLowerCase())) {
+      throw new Error('Someone with this name is already in the org.')
+    }
+    const person: OrgPerson = {
+      id: uid('org'), name, designation: input.designation?.trim() ?? '', level: input.level,
+      departments: [...new Set(input.departments ?? [])], verticals: [...new Set(input.verticals ?? [])], managerId: input.managerId || null,
+      email: input.email?.trim() ?? '', status: 'active', photoUrl: input.photoUrl ?? null, createdAt: isoToday(),
+    }
+    const problem = managerProblem(person, person.managerId, [...this.data.orgPeople, person])
+    if (problem) throw new Error(problem)
+    this.data.orgPeople = [...this.data.orgPeople, person]
+    this.resyncTeamsFromOrg()
+    return person
+  }
+
+  async updateOrgPerson(id: string, patch: UpdateOrgPersonPatch): Promise<OrgPerson> {
+    const current = this.data.orgPeople.find((p) => p.id === id)
+    if (!current) throw new Error('This person is no longer in the org.')
+    const next: OrgPerson = {
+      ...current,
+      ...(patch.name !== undefined ? { name: patch.name.trim() } : {}),
+      ...(patch.designation !== undefined ? { designation: patch.designation.trim() } : {}),
+      ...(patch.email !== undefined ? { email: patch.email.trim() } : {}),
+      ...(patch.level !== undefined ? { level: patch.level } : {}),
+      ...(patch.departments !== undefined ? { departments: [...new Set(patch.departments)] } : {}),
+      ...(patch.verticals !== undefined ? { verticals: [...new Set(patch.verticals)] } : {}),
+      ...(patch.managerId !== undefined ? { managerId: patch.managerId || null } : {}),
+      ...(patch.status !== undefined ? { status: patch.status } : {}),
+      ...(patch.photoUrl !== undefined ? { photoUrl: patch.photoUrl } : {}),
+    }
+    if (patch.employeeNumber !== undefined) next.employeeNumber = this.checkedEmployeeNumber(patch.employeeNumber, next.email, { orgId: id })
+    if (!next.name) throw new Error('Enter the employee name.')
+    const people = this.data.orgPeople.map((p) => (p.id === id ? next : p))
+    const problem = managerProblem(next, next.managerId, people)
+    if (problem) throw new Error(problem)
+    const broken = reportsBrokenByLevel(id, next.level, people)
+    if (broken.length) throw new Error(`${broken.map((p) => p.name).join(', ')} would report to someone at their own level or below — move them first.`)
+    this.data.orgPeople = people
+    this.resyncTeamsFromOrg()
+    return next
+  }
+
+  /** Removes a person; their direct reports move up to that person's manager. */
+  async deleteOrgPerson(id: string): Promise<void> {
+    const person = this.data.orgPeople.find((p) => p.id === id)
+    if (!person) return
+    this.data.orgPeople = this.data.orgPeople
+      .filter((p) => p.id !== id)
+      .map((p) => (p.managerId === id ? { ...p, managerId: person.managerId } : p))
+    this.data.tenderWebsites = this.data.tenderWebsites.map(site => site.dscEmployeeId === id ? { ...site, dscEmployeeId: null } : site)
+    this.resyncTeamsFromOrg()
+  }
+
+  /** Pre-sales / Bid / Legal follow the org; their member ids are kept so assignments resolve. */
+  private resyncTeamsFromOrg() {
+    this.data.deliveryTeamMembers = syncAllTeamsFromOrg(this.data.orgPeople, this.data.deliveryTeamMembers)
+  }
+
+  async deleteOpportunity(id: string) {
+    this.data.opportunities = this.data.opportunities.filter((o) => o.id !== id)
+    this.data.opportunityStageChanges = this.data.opportunityStageChanges.filter((c) => c.opportunityId !== id)
+  }
+
+  // --- Live Bids -----------------------------------------------------------
+
+  private attentionFor(bidId: string): BidGridRow['attentionFlag'] {
+    const deadline = this.data.bidMilestones.find(
+      (m) => m.bidId === bidId && m.key === 'submissionDeadline' && m.status === 'open',
+    )
+    const corrigendumIds = new Set(this.data.bidCorrigenda.filter((c) => c.bidId === bidId).map((c) => c.id))
+    const hasPendingCorrigendum = this.data.bidCorrigendumChanges.some(
+      (c) => corrigendumIds.has(c.corrigendumId) && c.decision === 'pending',
+    )
+    return computeAttentionFlag({ dueAt: deadline?.dueAt ?? null, hasPendingCorrigendum, today: isoToday() })
+  }
+
+  /** Mirrors the API's assertFieldsNotProtected (spec §13): a frozen field on a
+   *  bid rejects direct edits until it is unfrozen. */
+  private assertNotProtected(bidId: string, fieldKeys: string[]) {
+    if (!PROTECTED_VALUES_ENFORCED) return
+    const frozen = this.data.protectedValues.find(
+      (p) => p.entityType === 'bid' && p.entityId === bidId && p.frozen && fieldKeys.includes(p.fieldKey),
+    )
+    if (frozen) throw new Error(`"${frozen.fieldKey}" is protected — unfreeze it first.`)
+  }
+
+  private requireBid(id: string): Bid {
+    const bid = this.data.bids.find((b) => b.id === id)
+    if (!bid) throw new Error(`No such bid: ${id}`)
+    return bid
+  }
+
+  /** Returns fresh, normalized copies: a snapshot saved before the Corrigendum
+   *  Part 1 register/clause fields existed reads back with their defaults. */
+  private joinCorrigendum(c: Omit<BidCorrigendum, 'changes'>): BidCorrigendum {
+    return {
+      ...c, ...normalizeRegister(c),
+      changes: this.data.bidCorrigendumChanges.filter((ch) => ch.corrigendumId === c.id).map((ch) => normalizeChange(ch)),
+    }
+  }
+
+  async listBidsForGrid(filterRules: SystemBidViewFilterRule[] = []) {
+    const today = isoToday()
+    const generalByBid = new Map(this.data.bidSynopsis.filter(section => section.section === 'general').map(section => [section.bidId, documentToGeneral(section.document)]))
+    const owners = buildOwnerMap(
+      this.data.ownershipAssignments, 'bid', this.data.bids.map((b) => b.id), today, this.ownershipContext(),
+    )
+    // Active custom columns only — an archived column's values are retained
+    // but never surface in the grid or in filtering (spec §8.1).
+    const activeFields = this.data.bidCustomFields.filter((f) => f.status === 'active')
+    const activeFieldById = new Map(activeFields.map((f) => [f.id, f]))
+    const fieldTypes: Record<string, CustomFieldType> = {}
+    for (const f of activeFields) fieldTypes[`custom:${f.key}`] = f.dataType
+    const customValuesByBid = new Map<string, Record<string, CustomValue>>()
+    for (const v of this.data.bidCustomFieldValues) {
+      const field = activeFieldById.get(v.fieldId)
+      if (!field) continue
+      const forBid = customValuesByBid.get(v.bidId) ?? {}
+      forBid[field.key] = v.value
+      customValuesByBid.set(v.bidId, forBid)
+    }
+    const rows: BidGridRow[] = this.data.bids.map((bid) => {
+      const opp = this.data.opportunities.find((o) => o.id === bid.opportunityId)
+      const ownerId = owners.get(bid.id)?.salesPersonId
+      const emailOf = (personId: string | null | undefined) =>
+        personId ? this.data.salesPersons.find((p) => p.id === personId)?.officialEmail ?? null : null
+      const ownerEmail = emailOf(ownerId)
+      const solutionLead = this.data.ownershipAssignments.find(
+        (a) => a.entityType === 'bid' && a.entityId === bid.id && a.role === 'solutionLead' && a.endDate === null,
+      )
+      const bidCorrigenda = this.data.bidCorrigenda.filter((c) => c.bidId === bid.id)
+      const latestCorrigendum = bidCorrigenda.reduce<(typeof bidCorrigenda)[number] | null>(
+        (best, c) => (!best || c.corrigendumNumber > best.corrigendumNumber ? c : best), null,
+      )
+      const nextMilestone = this.data.bidMilestones
+        .filter((m) => m.bidId === bid.id && m.status === 'open')
+        .sort((a, b) => (a.dueAt ?? '9999').localeCompare(b.dueAt ?? '9999'))[0]
+      const nextAction = this.data.followUps
+        .filter((f) => f.entityType === 'bid' && f.entityId === bid.id && f.status === 'open')
+        .sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0]
+      return {
+        ...bid,
+        sheet: bid.sheet ?? DEFAULT_OWNED_SHEET,
+        opportunityCode: opp?.opportunityCode ?? '',
+        opportunityType: opp?.opportunityType ?? '',
+        createdBy: null, // the local store has no sign-in, so no creator
+        departmentId: opp?.departmentId ?? '',
+        departmentName: this.data.nodes.find((n) => n.id === opp?.departmentId)?.name ?? null,
+        stateCode: opp?.stateCode ?? null,
+        city: opp?.city ?? null,
+        opportunityName: opp?.opportunityName ?? '',
+        gemTenderId: opp?.gemTenderId || generalByBid.get(bid.id)?.tenderId || '',
+        referenceNo: opp?.referenceNo || generalByBid.get(bid.id)?.referenceNo || '',
+        assignmentName: opp?.assignmentName || generalByBid.get(bid.id)?.assignmentName || '',
+        submissionDate: opp?.submissionDate ?? '',
+        valueAmount: opp?.valueAmount ?? '',
+        valueUnit: opp?.valueUnit ?? '',
+        emdAmount: opp?.emdAmount ?? '',
+        emdUnit: opp?.emdUnit ?? '',
+        vertical: opp?.vertical ?? '',
+        geoSalesPersonId: opp?.geoSalesPersonId ?? null,
+        buSalesPersonId: opp?.buSalesPersonId ?? null,
+        preSalesPersonId: opp?.preSalesPersonId ?? null,
+        legalPersonId: opp?.legalPersonId ?? null,
+        bidTeamMemberId: opp?.bidTeamMemberId ?? null,
+        ownerEmail,
+        solutionLeadEmail: emailOf(solutionLead?.salesPersonId),
+        documentCount: this.data.bidDocuments.filter((d) => d.entityType === 'bid' && d.entityId === bid.id).length,
+        latestCorrigendumStatus: latestCorrigendum
+          ? (this.data.bidCorrigendumChanges.some((c) => c.corrigendumId === latestCorrigendum.id && c.decision === 'pending')
+            ? 'pending_review' : 'reviewed')
+          : null,
+        nextMilestoneLabel: nextMilestone?.label ?? null,
+        nextMilestoneDueAt: nextMilestone?.dueAt ?? null,
+        daysRemaining: nextMilestone?.dueAt
+          ? Math.ceil((new Date(nextMilestone.dueAt).getTime() - Date.now()) / 86_400_000)
+          : null,
+        nextActionNote: nextAction?.note ?? null,
+        nextActionDueDate: nextAction?.dueDate ?? null,
+        nextActionAssigneeEmail: emailOf(nextAction?.assigneeId),
+        // The local store has no signed-in user, so no audit row ever carries
+        // an author — there is nothing real to show here.
+        updatedBy: null,
+        attentionFlag: this.attentionFor(bid.id),
+        customValues: customValuesByBid.get(bid.id) ?? {},
+        generalValues: generalByBid.get(bid.id) ?? {},
+      }
+    })
+    // Local dev has no signed-in user, so "$currentUser" never matches.
+    return applyFilterRules(rows as unknown as Record<string, unknown>[], filterRules, null, fieldTypes) as unknown as BidGridRow[]
+  }
+
+  async getInsights(filters: InsightsFilters): Promise<InsightsData> {
+    const rows = await this.listBidsForGrid()
+    const opportunities = new Map(this.data.opportunities.map(o => [o.id, o]))
+    const names = new Map([...this.data.salesPersons, ...this.data.deliveryTeamMembers].map(p => [p.id, p.name]))
+    const salesByEmail = new Map(this.data.salesPersons.map(p => [p.officialEmail, p]))
+    const salesById = new Map(this.data.salesPersons.map(p => [p.id, p]))
+    const competition = new Map(this.data.bidSynopsis.filter(s => s.section === 'competition').map(s => [s.bidId, competitionNames(s.document)]))
+    return computeInsights(rows.flatMap(row => {
+      const opportunity = opportunities.get(row.opportunityId)
+      if (!opportunity) return []
+      return [{ id: row.id, opportunityId: row.opportunityId, name: row.opportunityName, department: row.departmentName || 'Unassigned',
+        vertical: row.vertical || 'Unassigned', stateCode: row.stateCode, stageKey: row.stageKey, opportunityStageKey: opportunity.stageKey,
+        sheet: row.sheet, status: row.status, attentionFlag: row.attentionFlag, createdAt: opportunity.createdAt,
+        closedOn: opportunity.closedOn, dueAt: row.nextMilestoneDueAt || row.submissionDate || null,
+        valueCr: insightValueCr(row.valueAmount, row.valueUnit, opportunity.currency), owner: row.ownerEmail || 'Unassigned',
+        presales: names.get(row.preSalesPersonId ?? '') || row.solutionLeadEmail || 'Unassigned', team: names.get(row.bidTeamMemberId ?? '') || 'Unassigned',
+        ownerPhotoUrl: salesByEmail.get(row.ownerEmail ?? '')?.photoUrl ?? null,
+        presalesPhotoUrl: salesById.get(row.preSalesPersonId ?? '')?.photoUrl ?? salesByEmail.get(row.solutionLeadEmail ?? '')?.photoUrl ?? null,
+        teamPhotoUrl: salesById.get(row.bidTeamMemberId ?? '')?.photoUrl ?? null,
+        competitors: competition.get(row.id) ?? [] }]
+    }), filters)
+  }
+
+  async getBid(id: string) {
+    return this.data.bids.find((b) => b.id === id) ?? null
+  }
+
+  async getBidForOpportunity(opportunityId: string) {
+    return this.data.bids.find((b) => b.opportunityId === opportunityId) ?? null
+  }
+
+  /** Resolves a department choice to a department node — the existing one, or one created (with its major
+   *  department, if new) through `createNode`. Everything that can fail is validated BEFORE any node is
+   *  created: the in-memory store has no rollback. */
+  private async resolveDepartmentNode(choice: DepartmentChoice): Promise<HierNode> {
+    const usable = (id: string) => {
+      const n = this.data.nodes.find((x) => x.id === id)
+      if (!n || n.domain !== 'org' || n.typeKey !== 'department' || n.status !== 'active') {
+        throw new Error('That department no longer exists. Pick another one.')
+      }
+      return n
+    }
+    const sameName = (n: HierNode, name: string) => n.name.trim().toLowerCase() === name.trim().toLowerCase()
+    let department: HierNode
+    if (choice.mode === 'existing') {
+      department = usable(choice.departmentId)
+    } else {
+      const childName = choice.name.trim()
+      if (!childName) throw new Error('Enter a name.')
+      const parentChoice = choice.parent
+      if (parentChoice.mode === 'create' && !parentChoice.name.trim()) throw new Error('Enter a name.')
+      const existingParent = parentChoice.mode === 'existing' ? usable(parentChoice.departmentId) : undefined
+      const parent = existingParent
+        ?? this.data.nodes.find((n) => parentChoice.mode === 'create' && n.domain === 'org' && n.typeKey === 'department'
+          && n.parentId === null && n.status === 'active' && n.stateCode === parentChoice.stateCode && sameName(n, parentChoice.name))
+        ?? (parentChoice.mode === 'create'
+          ? await this.createNode({ domain: 'org', typeKey: 'department', parentId: null, stateCode: parentChoice.stateCode, name: parentChoice.name.trim() })
+          : undefined)
+      if (!parent) throw new Error('That department no longer exists. Pick another one.')
+      department = this.data.nodes.find((n) => n.domain === 'org' && n.typeKey === 'department' && n.parentId === parent.id
+        && n.status === 'active' && sameName(n, childName))
+        ?? await this.createNode({ domain: 'org', typeKey: 'department', parentId: parent.id, stateCode: parent.stateCode, name: childName })
+    }
+    return department
+  }
+
+  /** The Create Bid department rule (same as apps/api's resolveBidDepartment): an
+   *  opportunity that has a department keeps it; one that has none needs `choice` —
+   *  an existing department, or a new one (and its major department) created through
+   *  `createNode`, the same path Account Mapping uses. The department is written onto
+   *  the OPPORTUNITY; the bid keeps no copy. The in-memory store has no rollback, so
+   *  everything that can fail is validated BEFORE any node is created. */
+  private async resolveBidDepartment(opp: Opportunity, choice: DepartmentChoice | undefined) {
+    if (opp.departmentId) {
+      if (choice) throw new Error('This opportunity already has a department; it is used as is.')
+      return
+    }
+    if (!choice) throw new Error(DEPARTMENT_REQUIRED_MESSAGE)
+    const department = await this.resolveDepartmentNode(choice)
+    opp.departmentId = department.id
+    opp.stateCode = department.stateCode
+    this.auditCustom({
+      entityType: 'opportunity', entityId: opp.id, field: 'departmentId', oldValue: '', newValue: department.id,
+      action: 'update', reason: 'Set while creating a bid',
+    })
+  }
+
+  async createBidForNewOpportunity(opportunity: NewBidOpportunity, department: DepartmentChoice, sheet: OwnedSheet = DEFAULT_OWNED_SHEET) {
+    const name = opportunity.opportunityName.trim()
+    if (!name) throw new Error('Enter the opportunity name.')
+    assertOwnedSheet(sheet)
+    // Resolve (validate, then create) the department first; only then create the opportunity under it.
+    const dept = await this.resolveDepartmentNode(department)
+    const opp = await this.createOpportunity({
+      departmentId: dept.id, opportunityName: name, gemTenderId: opportunity.gemTenderId?.trim(),
+      city: opportunity.city?.trim() || null, submissionDate: opportunity.submissionDate?.trim(),
+      referenceNo: opportunity.referenceNo?.trim() || null, assignmentName: opportunity.assignmentName?.trim() || null,
+      opportunityType: opportunity.opportunityType?.trim() ?? '',
+    })
+    return this.createBid(opp.id, undefined, sheet)
+  }
+
+  private bidTransferContext(): BidTransferContext {
+    return {
+      existing: this.data.opportunities.map(o => {
+        const bid = this.data.bids.find(b => b.opportunityId === o.id)
+        const general = bid ? documentToGeneral(this.data.bidSynopsis.find(x => x.bidId === bid.id && x.section === 'general')?.document) : {}
+        const str = (v: unknown) => v == null ? '' : String(v)
+        const current: Record<string, string> = {
+          opportunityName: str(o.opportunityName), gemTenderId: str(o.gemTenderId), assignmentName: str(o.assignmentName), referenceNo: str(o.referenceNo),
+          opportunityType: str(o.opportunityType), publishDate: str(o.publishDate), submissionDate: str(o.submissionDate), vertical: str(o.vertical),
+          departmentId: str(o.departmentId), stateCode: str(o.stateCode), geoSalesPersonId: str(o.geoSalesPersonId), buSalesPersonId: str(o.buSalesPersonId),
+          preSalesPersonId: str(o.preSalesPersonId), bidTeamMemberId: str(o.bidTeamMemberId),
+          stageKey: str(bid?.stageKey), decision: str(bid?.decision), tenderLink: str(bid?.tenderLink),
+          ...Object.fromEntries(Object.entries(general).map(([k, v]) => [`general:${k}`, v])),
+        }
+        return { id: o.id, bidCode: bid?.bidCode, opportunityName: o.opportunityName, gemTenderId: o.gemTenderId ?? '', current }
+      }),
+      people: [...this.data.salesPersons.filter(p => p.status !== 'inactive' && p.status !== 'resigned').map(p => ({ id: p.id, name: p.name, email: p.officialEmail, mobile: p.mobile, team: 'sales' })),
+        ...this.data.deliveryTeamMembers.filter(p => p.status === 'active')],
+      states: this.data.nodes.filter(n => n.typeKey === 'state').map(n => ({ id: String(n.stateCode), name: n.name })),
+      departments: this.data.nodes.filter(n => n.domain === 'org' && n.typeKey === 'department' && n.status === 'active'),
+      customFields: withSystemOptions(this.data.bidCustomFields.filter(f => f.status === 'active' && ['bidTracker', 'master'].includes(f.sheet)), this.bidOptionLookups()),
+      verticals: listMasterLogic(this.data.commercialCalculator, 'verticals').filter(v => v.active).map(v => v.name),
+    }
+  }
+  async previewBidImport(input: { table: BidImportTable }): Promise<BidImportPreview> {
+    return validateBidTransfer(input.table, this.bidTransferContext())
+  }
+  async importBids(input: { table: BidImportTable }): Promise<BidImportResult> {
+    const context = this.bidTransferContext(), preview = validateBidTransfer(input.table, context)
+    if (!preview.valid) return { status: 'rejected', preview }
+    // Use the normal field writers on an isolated copy. Publish once only after
+    // every row succeeds and the live store is still exactly the validated state.
+    const baseline = JSON.stringify(this.data), staged = new InMemoryRepository()
+    staged.hydrate(structuredClone(this.data))
+    for (const { values: v, legacy, mode, targetId } of preview.prepared) {
+      const text = (key: string) => v[key] == null ? '' : String(v[key])
+      if (mode === 'override' && targetId) { await staged.overrideImportedBid(targetId, v, legacy, context); continue }
+      const opp = await staged.createOpportunity({
+        departmentId: text('departmentId'), opportunityName: text('opportunityName'), gemTenderId: text('gemTenderId'),
+        assignmentName: text('assignmentName'), referenceNo: text('referenceNo'), opportunityType: text('opportunityType'),
+        publishDate: text('publishDate'), submissionDate: text('submissionDate'), vertical: text('vertical'),
+        valueAmount: text('valueAmount'), valueUnit: 'cr', currency: 'INR', emdAmount: scaleBidAmount(text('emdAmount'), -3), emdUnit: 'thousand',
+        geoSalesPersonId: text('geoSalesPersonId') || null, buSalesPersonId: text('buSalesPersonId') || null,
+        preSalesPersonId: text('preSalesPersonId') || null, bidTeamMemberId: text('bidTeamMemberId') || null,
+      })
+      if (!opp.departmentId) { opp.opportunityCode = ''; opp.stateCode = v.stateCode === undefined ? null : Number(v.stateCode) }
+      const now = new Date().toISOString(), decision = text('decision') || 'pending'
+      const bid: Bid = { id: uid('bid'), opportunityId: opp.id, bidCode: formatBidCode(new Date().getFullYear(), inMemoryBidSeq++),
+        stageKey: decision === 'no_go' ? 'dropped' : decision === 'go' ? 'goApproved' : text('stageKey') || DEFAULT_BID_STAGE_KEY,
+        decision: decision as Bid['decision'], status: 'active', dataConfidence: 'needs_review', tenderLink: text('tenderLink') || null,
+        sheet: 'bidTracker', archivedAt: null, createdAt: now, updatedAt: now }
+      staged.data.bids.push(bid)
+      staged.data.bidMilestones.push({ id: uid('bms'), bidId: bid.id, milestoneType: 'submissionDeadline', key: 'submissionDeadline', label: 'Submission Deadline', dueAt: parseSubmissionDate(opp.submissionDate), venue: null, notes: null, status: 'open', source: 'manual', createdAt: now, updatedAt: now })
+      const general = Object.fromEntries(Object.entries(v).filter(([key]) => key.startsWith('general:')).map(([key,value]) => [key.slice(8), String(value ?? '')]))
+      if (Object.keys(general).length) await staged.saveBidSynopsis({ bidId: bid.id, section: 'general', document: generalToDocument(general), expectedRevision: 0 })
+      for (const field of context.customFields) if (v[`custom:${field.key}`] !== undefined) await staged.setBidCustomValue(bid.id, field.id, v[`custom:${field.key}`])
+      const owner = context.people.find(p => p.team === 'sales' && p.email === text('ownerEmail'))
+      if (owner) await staged.assignOwner({ entityType: 'bid', entityId: bid.id, salesPersonId: owner.id, startDate: isoToday() })
+      // Historical tracker columns with no app field (or values that could not be linked) stay with the bid.
+      if (Object.keys(legacy).length) staged.auditCustom({ entityType: 'bid', entityId: bid.id, field: BID_LEGACY_AUDIT_FIELD, oldValue: '', newValue: JSON.stringify(legacy), action: 'create', reason: 'Historical import values without an app field' })
+    }
+    if (baseline !== JSON.stringify(this.data)) throw new Error('Live data changed during staging. Revalidate the entire file before importing.')
+    this.data = staged.data
+    return { status: 'imported', count: preview.rowCount }
+  }
+
+  /** Import Override: update the matched opportunity/bid in place (Bid ID kept). Only fields the file
+   *  provides change; blank cells never clear a value. Mirrors apps/api/src/lib/bidTransfer.ts overrideBid. */
+  private async overrideImportedBid(opportunityId: string, v: PreparedBidImport['values'], legacy: Record<string, string>, context: BidTransferContext) {
+    const text = (key: string) => v[key] == null ? '' : String(v[key])
+    const patch: Partial<Opportunity> = {}
+    for (const key of ['opportunityName', 'gemTenderId', 'assignmentName', 'referenceNo', 'opportunityType', 'publishDate', 'submissionDate', 'vertical', 'departmentId', 'geoSalesPersonId', 'buSalesPersonId', 'preSalesPersonId', 'bidTeamMemberId'] as const) {
+      if (text(key)) (patch as Record<string, unknown>)[key] = text(key)
+    }
+    if (text('stateCode')) patch.stateCode = Number(text('stateCode'))
+    if (text('valueAmount')) Object.assign(patch, { valueAmount: text('valueAmount'), valueUnit: 'cr' })
+    if (text('emdAmount')) Object.assign(patch, { emdAmount: scaleBidAmount(text('emdAmount'), -3), emdUnit: 'thousand' })
+    if (Object.keys(patch).length) await this.updateOpportunity(opportunityId, patch)
+    const bid = this.data.bids.find(b => b.opportunityId === opportunityId)
+    if (!bid) return
+    const bidPatch: Partial<Pick<Bid, 'stageKey' | 'decision' | 'tenderLink'>> = {}
+    if (text('stageKey')) bidPatch.stageKey = text('stageKey')
+    if (text('decision')) bidPatch.decision = text('decision') as Bid['decision']
+    if (text('tenderLink')) bidPatch.tenderLink = text('tenderLink')
+    if (Object.keys(bidPatch).length) await this.updateBid(bid.id, bidPatch)
+    const general = Object.entries(v).filter(([key, value]) => key.startsWith('general:') && String(value ?? '').trim())
+    if (general.length) {
+      const existing = this.data.bidSynopsis.find(x => x.bidId === bid.id && x.section === 'general')
+      let doc = existing?.document ?? null
+      for (const [key, value] of general) doc = updateGeneralDocument(doc, key.slice(8), String(value))
+      await this.saveBidSynopsis({ bidId: bid.id, section: 'general', document: doc!, expectedRevision: existing?.revision ?? 0 })
+    }
+    for (const field of context.customFields) {
+      const value = v[`custom:${field.key}`]
+      if (value !== undefined && value !== null && value !== '') await this.setBidCustomValue(bid.id, field.id, value)
+    }
+    if (Object.keys(legacy).length) this.auditCustom({ entityType: 'bid', entityId: bid.id, field: BID_LEGACY_AUDIT_FIELD, oldValue: '', newValue: JSON.stringify(legacy), action: 'update', reason: 'Historical import values without an app field' })
+  }
+
+  async createBid(opportunityId: string, department?: DepartmentChoice, sheet: OwnedSheet = DEFAULT_OWNED_SHEET) {
+    assertOwnedSheet(sheet)
+    const opp = this.data.opportunities.find((o) => o.id === opportunityId)
+    if (!opp) throw new Error(`No such opportunity: ${opportunityId}`)
+    if (this.data.bids.some((b) => b.opportunityId === opportunityId)) {
+      throw new Error('This opportunity already has a bid.')
+    }
+    await this.resolveBidDepartment(opp, department)
+    const now = new Date().toISOString()
+    const bid: Bid = {
+      id: uid('bid'),
+      opportunityId,
+      bidCode: formatBidCode(new Date().getFullYear(), inMemoryBidSeq++),
+      stageKey: DEFAULT_BID_STAGE_KEY,
+      decision: 'pending',
+      status: 'active',
+      dataConfidence: 'verified',
+      tenderLink: null,
+      sheet,
+      archivedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    }
+    this.data.bids.push(bid)
+    this.data.bidMilestones.push({
+      id: uid('bms'), bidId: bid.id, milestoneType: 'submissionDeadline', key: 'submissionDeadline',
+      label: 'Submission Deadline', dueAt: parseSubmissionDate(opp.submissionDate), venue: null, notes: null,
+      status: 'open', source: 'manual', createdAt: now, updatedAt: now,
+    })
+    return bid
+  }
+
+  async updateBid(id: string, patch: Partial<Pick<Bid, 'stageKey' | 'decision' | 'tenderLink' | 'sheet' | 'lifecycleData'>>) {
+    const bid = this.requireBid(id)
+    const next = { ...patch }
+    if (next.sheet !== undefined) {
+      assertOwnedSheet(next.sheet)
+      assertLifecycleMove(bid.sheet, next.sheet)
+    }
+    if (next.lifecycleData) {
+      validateLifecycleData(next.lifecycleData, bid.sheet)
+      next.lifecycleData = { ...bid.lifecycleData, ...next.lifecycleData }
+    }
+    const effectiveStageKey = next.stageKey ?? bid.stageKey
+    // The user's stage order (Settings > Masters > Live Bids > Bid Stages) places user-added stages for the gate.
+    const stageOrder = listMasterLogic(this.data.commercialCalculator, 'bidStages').map((s) => ({ key: s.code }))
+    if (next.decision === 'go' && !isAtOrAfterSubmitted(effectiveStageKey, stageOrder)) {
+      throw new Error('Cannot mark Go before the bid reaches Submitted.')
+    }
+    // A final decision always wins over a stageKey in the same patch, so the
+    // two fields can never visibly disagree (spec §4.4).
+    if (next.decision === 'go') next.stageKey = 'goApproved'
+    if (next.decision === 'no_go') next.stageKey = 'dropped'
+    this.assertNotProtected(id, Object.keys(next))
+    // One audit entry per patched field (like the API), so Activity History has
+    // real bid edits to show in local mode too.
+    for (const field of Object.keys(next) as (keyof typeof next)[]) {
+      const before = bid[field] == null ? '' : typeof bid[field] === 'object' ? JSON.stringify(bid[field]) : String(bid[field])
+      const after = next[field] == null ? '' : typeof next[field] === 'object' ? JSON.stringify(next[field]) : String(next[field])
+      if (before !== after) {
+        this.auditCustom({ entityType: 'bid', entityId: id, field, oldValue: before, newValue: after, action: 'update' })
+      }
+    }
+    const lifecycleReachedSheet = furthestLifecycleSheet(bid.sheet, bid.lifecycleReachedSheet, next.sheet ?? bid.sheet)
+    Object.assign(bid, next, { lifecycleReachedSheet, updatedAt: new Date().toISOString() })
+    return bid
+  }
+
+  async archiveBid(id: string) {
+    const bid = this.requireBid(id)
+    bid.status = 'archived'
+    bid.archivedAt = new Date().toISOString()
+    bid.updatedAt = bid.archivedAt
+    return bid
+  }
+
+  async markBidVerified(id: string) {
+    const bid = this.requireBid(id)
+    const corrigendumIds = new Set(this.data.bidCorrigenda.filter((c) => c.bidId === id).map((c) => c.id))
+    if (this.data.bidCorrigendumChanges.some((ch) => corrigendumIds.has(ch.corrigendumId) && ch.decision === 'pending')) {
+      throw new Error('This bid has a pending corrigendum change — resolve it before marking verified.')
+    }
+    if (bid.dataConfidence !== 'verified') {
+      bid.dataConfidence = 'verified'
+      bid.updatedAt = new Date().toISOString()
+      this.auditCustom({ entityType: 'bid', entityId: id, field: 'dataConfidence', oldValue: 'needs_review', newValue: 'verified', action: 'mark_verified' })
+    }
+    return bid
+  }
+
+  async unarchiveBid(id: string) {
+    const bid = this.requireBid(id)
+    bid.status = 'active'
+    bid.archivedAt = null
+    bid.updatedAt = new Date().toISOString()
+    return bid
+  }
+
+  async deleteBid(id: string) {
+    this.requireBid(id)
+    const referenced =
+      this.data.bidCorrigenda.some((c) => c.bidId === id)
+      || (PROTECTED_VALUES_ENFORCED && this.data.protectedValues.some((p) => p.entityType === 'bid' && p.entityId === id))
+      || this.data.bidDocuments.some((d) => d.entityType === 'bid' && d.entityId === id)
+      || this.data.followUps.some((f) => f.entityType === 'bid' && f.entityId === id)
+    if (referenced) throw new Error('This bid has corrigenda, protected values, documents or follow-ups — archive it instead.')
+    this.data.bids = this.data.bids.filter((b) => b.id !== id)
+    this.data.bidMilestones = this.data.bidMilestones.filter((m) => m.bidId !== id)
+    this.data.bidSynopsis = this.data.bidSynopsis.filter((s) => s.bidId !== id)
+    // Mirrors the backend's ON DELETE CASCADE on bid_custom_field_values.
+    this.data.bidCustomFieldValues = this.data.bidCustomFieldValues.filter((v) => v.bidId !== id)
+  }
+
+  async listBidActionQueue() {
+    const today = isoToday()
+    const out: ActionQueueEntry[] = []
+    for (const f of this.data.followUps) {
+      if (f.entityType !== 'bid' || f.status !== 'open') continue
+      const bid = this.data.bids.find((b) => b.id === f.entityId)
+      if (!bid || bid.status !== 'active') continue
+      const opp = this.data.opportunities.find((o) => o.id === bid.opportunityId)
+      out.push({
+        followUpId: f.id, bidId: bid.id, bidCode: bid.bidCode, stageKey: bid.stageKey,
+        opportunityName: opp?.opportunityName ?? '', dueDate: f.dueDate, note: f.note, assigneeId: f.assigneeId,
+        attentionFlag: computeAttentionFlag({
+          dueAt: f.dueDate, hasPendingCorrigendum: this.attentionFor(bid.id) === 'corrigendumPending', today,
+        }),
+      })
+    }
+    return out.sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+  }
+
+  async getBidSynopsis(bidId: string, section: BidSynopsisSection): Promise<BidSynopsis | null> {
+    this.requireBid(bidId)
+    const record = this.data.bidSynopsis.find(s => s.bidId === bidId && s.section === section)
+    return record ? structuredClone(record) : null
+  }
+
+  async saveBidSynopsis(input: SaveBidSynopsisInput): Promise<BidSynopsis> {
+    const bid = this.requireBid(input.bidId)
+    validateSynopsisDocument(input.document)
+    const existing = this.data.bidSynopsis.find(s => s.bidId === input.bidId && s.section === input.section)
+    if ((existing?.revision ?? 0) !== input.expectedRevision) throw new Error('This section was changed elsewhere. Reload the saved version before saving again.')
+    const updated: BidSynopsis = {
+      bidId: input.bidId, section: input.section, document: structuredClone(input.document),
+      revision: input.expectedRevision + 1, updatedAt: new Date().toISOString(), updatedBy: null,
+    }
+    if (existing) Object.assign(existing, updated)
+    else this.data.bidSynopsis.push(updated)
+    bid.updatedAt = updated.updatedAt
+    return structuredClone(updated)
+  }
+
+  // --- Document maker (logic in ./makerDocuments; every change replaces the array) -----------------
+  private get makerDocs(): LocalMakerDocument[] { return this.data.makerDocuments ?? [] }
+  private putMakerDoc(doc: LocalMakerDocument): MakerDocument {
+    this.data.makerDocuments = [doc, ...this.makerDocs.filter((item) => item.id !== doc.id)]
+    return toPublic(doc)
+  }
+  async listMakerDocuments(): Promise<MakerDocument[]> {
+    return [...this.makerDocs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(toPublic)
+  }
+  async createMakerDocument(input: { kind: MakerDocumentKind; title: string; owner?: MakerOwner }): Promise<MakerDocument> {
+    return this.putMakerDoc(createLocal(input.kind, input.title, input.owner ?? LOCAL_OWNER))
+  }
+  async uploadMakerDocument(input: { name: string; data: string; owner?: MakerOwner }): Promise<MakerDocument> {
+    return this.putMakerDoc(uploadLocal(input.name, input.data, input.owner ?? LOCAL_OWNER))
+  }
+  async replaceMakerDocument(id: string, name: string, data: string): Promise<MakerDocument> {
+    return this.putMakerDoc(replaceLocal(requireLocal(this.makerDocs, id), name, data))
+  }
+  async renameMakerDocument(id: string, title: string): Promise<MakerDocument> {
+    return this.putMakerDoc(renameLocal(requireLocal(this.makerDocs, id), title))
+  }
+  async duplicateMakerDocument(id: string): Promise<MakerDocument> {
+    return this.putMakerDoc(duplicateLocal(requireLocal(this.makerDocs, id)))
+  }
+  async deleteMakerDocument(id: string): Promise<void> {
+    requireLocal(this.makerDocs, id)
+    this.data.makerDocuments = this.makerDocs.filter((item) => item.id !== id)
+  }
+  async getMakerDownload(id: string): Promise<MakerDownload> {
+    const doc = requireLocal(this.makerDocs, id)
+    const blob = new Blob([base64ToBytes(doc.contentBase64) as BlobPart], { type: MIME_FOR_FILE_TYPE[doc.fileType] })
+    return { url: URL.createObjectURL(blob), name: downloadName(doc) }
+  }
+  async listMakerShareDirectory(): Promise<{ email: string; name: string }[]> { throw new MakerSharingUnavailable() }
+  async listMakerShares(): Promise<MakerShare[]> { return [] }
+  async shareMakerDocument(): Promise<MakerShare[]> { throw new MakerSharingUnavailable() }
+  async unshareMakerDocument(): Promise<MakerShare[]> { throw new MakerSharingUnavailable() }
+  async listMakerVersions(): Promise<MakerVersion[]> { return [] }
+  async getMakerVersionDownload(): Promise<MakerDownload> { throw new MakerSharingUnavailable() }
+  async openMakerDesktopSession(): Promise<{ url: string; write: boolean }> { throw new MakerSharingUnavailable() }
+  async getMakerDriveStatus(): Promise<MakerDriveStatus> { return { configured: false, connected: false, lastSyncAt: null, lastError: null, folderUrl: null } }
+  async connectMakerDrive(): Promise<{ url: string }> { throw new MakerSharingUnavailable() }
+  async disconnectMakerDrive(): Promise<void> { throw new MakerSharingUnavailable() }
+
+  async listCredentialPassphrases(): Promise<CredentialPassphrase[]> { return structuredClone(this.data.credentialPassphrases ?? []) }
+  async createCredentialPassphrase(input: CredentialPassphraseInput): Promise<CredentialPassphrase> {
+    const clean = normalizeCredentialPassphrase(input)
+    const records = this.data.credentialPassphrases ?? []
+    if (records.length >= MAX_CREDENTIAL_PASSPHRASES) throw new Error('A maximum of 5 passphrases is allowed.')
+    if (records.some(item => item.name.toLowerCase() === clean.name.toLowerCase())) throw new Error('That passphrase name already exists.')
+    const record = { ...clean, id: uid('phrase'), updatedAt: new Date().toISOString() }
+    this.data.credentialPassphrases = [...records, record]
+    return structuredClone(record)
+  }
+  async updateCredentialPassphrase(input: CredentialPassphraseUpdate): Promise<CredentialPassphrase> {
+    const clean = normalizeCredentialPassphrase(input)
+    const records = this.data.credentialPassphrases ?? []
+    const existing = records.find(item => item.id === input.id)
+    if (!existing || existing.updatedAt !== input.expectedUpdatedAt) throw new Error('The passphrase changed. Reload before saving.')
+    if (records.some(item => item.id !== input.id && item.name.toLowerCase() === clean.name.toLowerCase())) throw new Error('That passphrase name already exists.')
+    const sites = this.data.tenderWebsites.filter(site => site.credentials?.passphraseId === input.id)
+    if (existing.proof.ciphertext !== clean.proof.ciphertext) {
+      if (sites.length !== input.replacements.length || new Set(input.replacements.map(item => item.id)).size !== sites.length) throw new Error('Connected websites changed. Reload before saving.')
+      for (const site of sites) {
+        const replacement = input.replacements.find(item => item.id === site.id)
+        if (!replacement || replacement.previousCiphertext !== site.credentials!.ciphertext || replacement.credentials.passphraseId !== input.id || replacement.credentials.passphraseRevision !== clean.proof.ciphertext) throw new Error('Connected credentials changed. Reload before saving.')
+        normalizeTenderWebsiteInput({ name: site.name, url: site.url, credentials: replacement.credentials })
+      }
+    } else if (input.replacements.length) throw new Error('Invalid credential replacement.')
+    const updated = { ...existing, ...clean, updatedAt: new Date().toISOString() }
+    this.data.tenderWebsites = this.data.tenderWebsites.map(site => {
+      const replacement = input.replacements.find(item => item.id === site.id)
+      return replacement ? { ...site, credentials: structuredClone(replacement.credentials), updatedAt: updated.updatedAt } : site
+    })
+    this.data.credentialPassphrases = records.map(item => item.id === input.id ? updated : item)
+    return structuredClone(updated)
+  }
+  async deleteCredentialPassphrase(id: string): Promise<void> {
+    if (this.data.tenderWebsites.some(site => site.credentials?.passphraseId === id)) throw new Error('This passphrase protects saved credentials and cannot be removed.')
+    this.data.credentialPassphrases = (this.data.credentialPassphrases ?? []).filter(item => item.id !== id)
+  }
+  private validateManagedCredential(lock: TenderWebsiteInput['credentials']) {
+    if (!lock?.passphraseId) return
+    const record = this.data.credentialPassphrases?.find(item => item.id === lock.passphraseId)
+    if (!record || record.proof.ciphertext !== lock.passphraseRevision) throw new Error('The passphrase changed. Reload and enter its current value.')
+  }
+  async listTenderWebsites(kind: TenderWebsiteKind = 'tender'): Promise<TenderWebsite[]> {
+    return this.data.tenderWebsites.filter(site => tenderWebsiteKind(site) === kind).sort((a, b) => a.name.localeCompare(b.name)).map(site => ({ ...site }))
+  }
+
+  async listTenderDscEmployees(): Promise<TenderDscEmployee[]> {
+    return (await this.listOrgPeople()).filter(person => person.status === 'active' && [0, 1, 2].includes(person.level))
+      .map(({ id, name, level }) => ({ id, name, level }))
+  }
+
+  private async validateTenderDsc(employeeId: string | null | undefined) {
+    if (employeeId && !(await this.listTenderDscEmployees()).some(person => person.id === employeeId)) {
+      throw new Error('Select an active employee at L0, L1, or L2 for DSC.')
+    }
+  }
+
+  async createTenderWebsite(input: TenderWebsiteInput): Promise<TenderWebsite> {
+    const clean = normalizeTenderWebsiteInput(input)
+    this.validateManagedCredential(clean.credentials)
+    const kind = clean.kind ?? 'tender'
+    assertUniqueTenderWebsiteName(this.data.tenderWebsites, clean.name, undefined, kind)
+    await this.validateTenderDsc(clean.dscEmployeeId)
+    const now = new Date().toISOString()
+    const site: TenderWebsite = { id: uid('tws'), ...clean, kind, createdAt: now, updatedAt: now }
+    this.data.tenderWebsites = [...this.data.tenderWebsites, site]
+    return { ...site }
+  }
+
+  async updateTenderWebsite(id: string, input: TenderWebsiteInput): Promise<TenderWebsite> {
+    const existing = this.data.tenderWebsites.find(site => site.id === id)
+    if (!existing) throw new Error('That website no longer exists.')
+    if (existing.editingLocked) throw new Error('Unlock editing before changing this website.')
+    const clean = normalizeTenderWebsiteInput(input)
+    this.validateManagedCredential(clean.credentials)
+    const kind = tenderWebsiteKind(existing) // a website never moves between Settings pages
+    assertUniqueTenderWebsiteName(this.data.tenderWebsites, clean.name, id, kind)
+    if (clean.dscEmployeeId !== existing.dscEmployeeId) await this.validateTenderDsc(clean.dscEmployeeId)
+    const updated: TenderWebsite = { ...existing, ...clean, kind, updatedAt: new Date().toISOString() }
+    this.data.tenderWebsites = this.data.tenderWebsites.map(site => (site.id === id ? updated : site))
+    return { ...updated }
+  }
+
+  async deleteTenderWebsite(id: string): Promise<void> {
+    this.data.tenderWebsites = this.data.tenderWebsites.filter(site => site.id !== id)
+  }
+
+  async setTenderWebsiteEditingLock(id: string, locked: boolean): Promise<TenderWebsite> {
+    const existing = this.data.tenderWebsites.find(site => site.id === id)
+    if (!existing) throw new Error('That website no longer exists.')
+    const updated = { ...existing, editingLocked: locked, updatedAt: new Date().toISOString() }
+    this.data.tenderWebsites = this.data.tenderWebsites.map(site => site.id === id ? updated : site)
+    return { ...updated }
+  }
+
+  // --- Roles & Access permission tree (logic in ./rbacTree; every change replaces the state) ------------
+  private get rbac(): rbacLocal.RbacLocalState { return this.data.rbacTree ?? rbacLocal.emptyRbacState() }
+  private set rbac(state: rbacLocal.RbacLocalState) { this.data.rbacTree = state }
+  async getRbacMyAccess(localEmail: string | null): Promise<RbacMyAccess> { return rbacLocal.localMyAccess(this.rbac, this.data.bidSavedViews, localEmail) }
+  async listRbacNodes(): Promise<RbacNode[]> { return rbacLocal.listLocalNodes(this.rbac, this.data.bidSavedViews) }
+  async syncRbacNodes(): Promise<RbacSyncResult> { const { state, result } = rbacLocal.syncLocalNodes(this.rbac); this.rbac = state; return result }
+  async getRbacSubjects(): Promise<RbacSubjects> { return rbacLocal.localSubjects(this.rbac) }
+  async getRbacConfig(subject: RbacSubjectRef): Promise<RbacSubjectConfig> { return rbacLocal.getLocalConfig(this.rbac, subject) }
+  async setRbacConfig(subject: RbacSubjectRef, changes: RbacGrantChange[]): Promise<void> { this.rbac = rbacLocal.setLocalConfig(this.rbac, subject, changes) }
+  async createRbacRole(input: RbacRoleInput): Promise<RbacCustomRole> { const { state, role } = rbacLocal.createLocalRole(this.rbac, input); this.rbac = state; return role }
+  async updateRbacRole(id: string, input: RbacRoleInput): Promise<void> { this.rbac = rbacLocal.updateLocalRole(this.rbac, id, input) }
+  async deleteRbacRole(id: string): Promise<void> { this.rbac = rbacLocal.deleteLocalRole(this.rbac, id) }
+  async createRbacTemplate(input: RbacTemplateInput): Promise<{ id: string }> { const { state, id } = rbacLocal.createLocalTemplate(this.rbac, input); this.rbac = state; return { id } }
+  async updateRbacTemplate(id: string, input: { name: string; description?: string }): Promise<void> { this.rbac = rbacLocal.updateLocalTemplate(this.rbac, id, input) }
+  async duplicateRbacTemplate(id: string): Promise<{ id: string }> { const { state, id: copy } = rbacLocal.duplicateLocalTemplate(this.rbac, id); this.rbac = state; return { id: copy } }
+  async deleteRbacTemplate(id: string): Promise<void> { this.rbac = rbacLocal.deleteLocalTemplate(this.rbac, id) }
+  async applyRbacTemplate(input: ApplyTemplateInput): Promise<void> { this.rbac = rbacLocal.applyLocalTemplate(this.rbac, input) }
+  async unlinkRbacTemplate(subject: RbacLinkableRef): Promise<void> { this.rbac = rbacLocal.unlinkLocalTemplate(this.rbac, subject) }
+
+  // --- Competitors (logic in ./competitors; every change replaces the array) ----------------------
+  async listCompetitors(): Promise<Competitor[]> {
+    return listCompetitorsLocal(this.data.competitors ?? [])
+  }
+
+  async createCompetitor(input: CompetitorInput): Promise<Competitor> {
+    const { items, created } = createCompetitorLocal(this.data.competitors ?? [], input)
+    this.data.competitors = items
+    return cloneCompetitor(created)
+  }
+
+  async updateCompetitor(id: string, input: CompetitorInput): Promise<Competitor> {
+    const { items, updated } = updateCompetitorLocal(this.data.competitors ?? [], id, input)
+    this.data.competitors = items
+    return cloneCompetitor(updated)
+  }
+
+  async deleteCompetitor(id: string): Promise<void> {
+    this.data.competitors = deleteCompetitorLocal(this.data.competitors ?? [], id)
+  }
+
+  // --- Insights Studio (logic in ./insightsStudio; every change replaces the arrays) ---------------
+  async listInsightVisuals(): Promise<InsightVisual[]> { return studioLocal.listVisualsLocal(this.data.insightVisuals ?? []) }
+  async createInsightVisual(input: InsightVisualInput): Promise<InsightVisual> {
+    const { items, created } = studioLocal.createVisualLocal(this.data.insightVisuals ?? [], input)
+    this.data.insightVisuals = items
+    return created
+  }
+  async updateInsightVisual(id: string, input: InsightVisualInput): Promise<InsightVisual> {
+    const { items, updated } = studioLocal.updateVisualLocal(this.data.insightVisuals ?? [], id, input)
+    this.data.insightVisuals = items
+    return updated
+  }
+  async deleteInsightVisual(id: string): Promise<void> {
+    this.data.insightVisuals = studioLocal.deleteVisualLocal(this.data.insightVisuals ?? [], id)
+  }
+  async listInsightReports(): Promise<InsightReport[]> { return studioLocal.listReportsLocal(this.data.insightReports ?? []) }
+  async createInsightReport(input: InsightReportInput): Promise<InsightReport> {
+    const { items, created } = studioLocal.createReportLocal(this.data.insightReports ?? [], this.data.insightVisuals ?? [], input)
+    this.data.insightReports = items
+    return created
+  }
+  async updateInsightReport(id: string, input: InsightReportInput): Promise<InsightReport> {
+    const { items, updated } = studioLocal.updateReportLocal(this.data.insightReports ?? [], this.data.insightVisuals ?? [], id, input)
+    this.data.insightReports = items
+    return updated
+  }
+  async deleteInsightReport(id: string): Promise<void> {
+    this.data.insightReports = studioLocal.deleteReportLocal(this.data.insightReports ?? [], id)
+  }
+  async listInsightCorrigenda(): Promise<InsightCorrigendumRow[]> {
+    const bids = new Map(this.data.bids.map((b) => [b.id, b]))
+    const names = new Map(this.data.opportunities.map((o) => [o.id, o.opportunityName]))
+    return this.data.bidCorrigenda.map((c) => {
+      const bid = bids.get(c.bidId)
+      return studioLocal.corrigendumRowLocal(this.joinCorrigendum(c), bid, names.get(bid?.opportunityId ?? '') ?? '')
+    })
+  }
+
+  async listAllBidMilestones(): Promise<BidMilestoneWithBid[]> {
+    const out: BidMilestoneWithBid[] = []
+    for (const m of this.data.bidMilestones) {
+      const bid = this.data.bids.find((b) => b.id === m.bidId)
+      if (!bid || bid.status !== 'active' || m.status === 'superseded') continue
+      const opp = this.data.opportunities.find((o) => o.id === bid.opportunityId)
+      out.push({ ...m, bidCode: bid.bidCode, opportunityName: opp?.opportunityName ?? '' })
+    }
+    return out.sort((a, b) => (a.dueAt ?? '9999').localeCompare(b.dueAt ?? '9999') || a.createdAt.localeCompare(b.createdAt))
+  }
+
+  async listBidMilestones(bidId: string) {
+    return this.data.bidMilestones
+      .filter((m) => m.bidId === bidId)
+      .sort((a, b) => (a.dueAt ?? '9999').localeCompare(b.dueAt ?? '9999') || a.createdAt.localeCompare(b.createdAt))
+  }
+
+  async createBidMilestone(input: {
+    bidId: string; milestoneType: string; key: string; label: string
+    dueAt?: string | null; venue?: string; notes?: string
+  }) {
+    this.requireBid(input.bidId)
+    if (this.data.bidMilestones.some((m) => m.bidId === input.bidId && m.key === input.key)) {
+      throw new Error(`Milestone "${input.key}" already exists for this bid.`)
+    }
+    const now = new Date().toISOString()
+    const milestone: BidMilestone = {
+      id: uid('bms'), bidId: input.bidId, milestoneType: input.milestoneType, key: input.key, label: input.label,
+      dueAt: input.dueAt ?? null, venue: input.venue ?? null, notes: input.notes ?? null,
+      status: 'open', source: 'manual', createdAt: now, updatedAt: now,
+    }
+    this.data.bidMilestones.push(milestone)
+    this.syncMilestoneToField(milestone)
+    return milestone
+  }
+
+  async updateBidMilestone(
+    id: string,
+    patch: Partial<Pick<BidMilestone, 'label' | 'dueAt' | 'venue' | 'notes' | 'status'>>,
+  ) {
+    const m = this.data.bidMilestones.find((x) => x.id === id)
+    if (!m) throw new Error(`No such milestone: ${id}`)
+    // Only a change to the milestone's DATE touches the protected fact; status/notes edits don't.
+    if (patch.dueAt !== undefined && patch.dueAt !== m.dueAt) this.assertNotProtected(m.bidId, [m.key])
+    Object.assign(m, patch, { updatedAt: new Date().toISOString() })
+    if (m.key === 'submissionDeadline' && patch.dueAt !== undefined) {
+      const bid = this.requireBid(m.bidId)
+      const opportunity = this.data.opportunities.find(item => item.id === bid.opportunityId)
+      if (opportunity) {
+        const previous = opportunity.submissionDate
+        opportunity.submissionDate = patch.dueAt ?? ''
+        if (previous !== opportunity.submissionDate) this.auditCustom({ entityType: 'bid', entityId: bid.id, field: 'submissionDeadline', oldValue: previous, newValue: opportunity.submissionDate, action: 'update', reason: 'Synced from Submission Deadline milestone' })
+      }
+      bid.updatedAt = new Date().toISOString()
+    }
+    if (patch.status !== undefined || patch.dueAt !== undefined) this.syncMilestoneToField(m)
+    return m
+  }
+
+  /** Timeline ⇄ Live Bids field sync (BID_TIMELINE_SYNC); mirrors apps/api/src/lib/bidTimelineSync.ts. */
+  private syncMilestoneToField(m: BidMilestone) {
+    const sync = timelineSyncForMilestone(m.key)
+    const field = sync && this.data.bidCustomFields.find(f => f.key === sync.field && f.status === 'active')
+    if (!sync || !field) return
+    const value = fieldValueForMilestone(sync, m.status, m.dueAt)
+    const existing = this.data.bidCustomFieldValues.find(v => v.bidId === m.bidId && v.fieldId === field.id)
+    if ((existing?.value ?? null) === value) return
+    if (value === null) this.data.bidCustomFieldValues = this.data.bidCustomFieldValues.filter(v => v !== existing)
+    else if (existing) Object.assign(existing, { value, updatedAt: new Date().toISOString() })
+    else { this.data.bidCustomFieldValues.push({ bidId: m.bidId, fieldId: field.id, value, updatedAt: new Date().toISOString() }); field.hasHeldValue = true }
+    this.auditCustom({ entityType: 'bidCustomFieldValue', entityId: m.bidId, field: sync.field, oldValue: String(existing?.value ?? ''), newValue: value ?? '', action: 'custom_value_synced', reason: `Synced from Timeline: ${sync.label}` })
+  }
+  private syncFieldToMilestone(bidId: string, fieldKey: string, value: unknown) {
+    const sync = timelineSyncForField(fieldKey)
+    if (!sync) return
+    const m = this.data.bidMilestones.find(x => x.bidId === bidId && x.key === sync.milestoneKey)
+    const next = milestoneStateForField(sync, value, isoToday(), m?.dueAt ? m.dueAt.slice(0, 10) : null)
+    const now = new Date().toISOString()
+    if (!m) {
+      if (next.status === 'completed') this.data.bidMilestones.push({ id: uid('bms'), bidId, milestoneType: 'timeline', key: sync.milestoneKey, label: sync.label, dueAt: next.dueAt, venue: null, notes: null, status: 'completed', source: 'manual', createdAt: now, updatedAt: now })
+    } else if (m.status !== next.status || (m.dueAt ?? '').slice(0, 10) !== (next.dueAt ?? '')) Object.assign(m, { status: next.status, dueAt: next.dueAt, updatedAt: now })
+  }
+
+  async deleteBidMilestone(id: string) {
+    const m = this.data.bidMilestones.find((x) => x.id === id)
+    if (!m) return
+    // A pending corrigendum change still targets this slot — deleting it
+    // would leave the change with nowhere to land.
+    const targeted = this.data.bidCorrigendumChanges.some((ch) => {
+      if (ch.decision !== 'pending' || ch.fieldKey !== m.key) return false
+      return this.data.bidCorrigenda.some((c) => c.id === ch.corrigendumId && c.bidId === m.bidId)
+    })
+    if (targeted) throw new Error('A pending corrigendum still targets this milestone.')
+    this.data.bidMilestones = this.data.bidMilestones.filter((x) => x.id !== id)
+  }
+
+  async listBidCorrigenda(bidId: string) {
+    return this.data.bidCorrigenda
+      .filter((c) => c.bidId === bidId)
+      .sort((a, b) => a.corrigendumNumber - b.corrigendumNumber)
+      .map((c) => this.joinCorrigendum(c))
+  }
+
+  async createBidCorrigendum(input: CreateCorrigendumInput) {
+    const bid = this.requireBid(input.bidId)
+    if (!Number.isInteger(input.corrigendumNumber) || input.corrigendumNumber < 1) throw new Error('Corrigendum number must be a positive whole number.')
+    if (!input.changes.length) throw new Error('A corrigendum needs at least one change.')
+    if (this.data.bidCorrigenda.some((c) => c.bidId === input.bidId && c.corrigendumNumber === input.corrigendumNumber)) {
+      throw new Error(`Corrigendum ${input.corrigendumNumber} already exists for this bid.`)
+    }
+    const keys = input.changes.map((ch) => ch.fieldKey.trim())
+    if (keys.some((k) => !k)) throw new Error('Every change needs a clause or field key.')
+    if (new Set(keys).size !== keys.length) throw new Error('Each clause can change only once per corrigendum.')
+    for (const ch of input.changes) {
+      // Clause changes are tracked for history only; field changes must target a real slot.
+      if (ch.kind === 'clause' || ch.fieldKey === 'tenderLink') continue
+      if (!this.data.bidMilestones.some((m) => m.bidId === input.bidId && m.key === ch.fieldKey)) {
+        throw new Error(`Unknown field "${ch.fieldKey}" — create its milestone slot first.`)
+      }
+    }
+    const corrigendum: Omit<BidCorrigendum, 'changes'> = {
+      id: uid('cor'), bidId: input.bidId, corrigendumNumber: input.corrigendumNumber,
+      sourceDocumentId: input.sourceDocumentId ?? null, detectedAt: new Date().toISOString(),
+      reviewedAt: null, reviewedBy: null, status: 'pending_review', ...normalizeRegister(input.register),
+    }
+    const changes = input.changes.map((ch) => ({
+      id: uid('cch'), corrigendumId: corrigendum.id, fieldKey: ch.fieldKey.trim(),
+      currentValue: ch.currentValue, proposedValue: ch.proposedValue,
+      decision: 'pending' as const, decidedAt: null, decidedBy: null, ...changeDetails({ ...ch, fieldKey: ch.fieldKey.trim() }),
+    }))
+    this.data.bidCorrigenda = [...this.data.bidCorrigenda, corrigendum]
+    this.data.bidCorrigendumChanges = [...this.data.bidCorrigendumChanges, ...changes]
+    bid.dataConfidence = 'needs_review'
+    bid.updatedAt = new Date().toISOString()
+    return this.joinCorrigendum(corrigendum)
+  }
+
+  async addCorrigendumChanges(input: AddCorrigendumChangesInput) {
+    const corrigendum = this.data.bidCorrigenda.find((c) => c.id === input.corrigendumId)
+    if (!corrigendum) throw new Error(`No such corrigendum: ${input.corrigendumId}`)
+    const bid = this.requireBid(corrigendum.bidId)
+    if (!input.changes.length) throw new Error('Add at least one change.')
+    if (input.changes.length > 200) throw new Error('A corrigendum can record up to 200 changes at once.')
+    const existingKeys = new Set(this.data.bidCorrigendumChanges.filter((ch) => ch.corrigendumId === corrigendum.id).map((ch) => ch.fieldKey))
+    const keys = input.changes.map((ch) => ch.fieldKey.trim())
+    if (keys.some((k) => !k)) throw new Error('Every change needs a clause or field key.')
+    if (new Set(keys).size !== keys.length || keys.some((k) => existingKeys.has(k))) throw new Error('Each clause can change only once per corrigendum.')
+    // Appended changes are tender clauses only — milestone fields are recorded with a new corrigendum.
+    if (input.changes.some((ch) => ch.kind !== 'clause')) throw new Error('Only clause changes can be added to an existing corrigendum.')
+    const changes = input.changes.map((ch) => ({
+      id: uid('cch'), corrigendumId: corrigendum.id, fieldKey: ch.fieldKey.trim(),
+      currentValue: ch.currentValue, proposedValue: ch.proposedValue,
+      decision: 'pending' as const, decidedAt: null, decidedBy: null, ...changeDetails({ ...ch, fieldKey: ch.fieldKey.trim() }),
+    }))
+    const reopened = { ...corrigendum, status: 'pending_review' as const, reviewedAt: null, reviewedBy: null }
+    this.data.bidCorrigenda = this.data.bidCorrigenda.map((c) => (c.id === corrigendum.id ? reopened : c))
+    this.data.bidCorrigendumChanges = [...this.data.bidCorrigendumChanges, ...changes]
+    bid.dataConfidence = 'needs_review'
+    bid.updatedAt = new Date().toISOString()
+    return this.joinCorrigendum(reopened)
+  }
+
+  async updateBidCorrigendumRegister(input: UpdateCorrigendumRegisterInput) {
+    const existing = this.data.bidCorrigenda.find((c) => c.id === input.corrigendumId)
+    if (!existing) throw new Error(`No such corrigendum: ${input.corrigendumId}`)
+    const updated = { ...existing, ...patchRegister(normalizeRegister(existing), input.patch) }
+    this.data.bidCorrigenda = this.data.bidCorrigenda.map((c) => (c.id === existing.id ? updated : c))
+    return this.joinCorrigendum(updated)
+  }
+
+  async reviewCorrigendumChange(input: { changeId: string; decision: 'accepted' | 'rejected'; reason?: string }) {
+    const change = this.data.bidCorrigendumChanges.find((c) => c.id === input.changeId)
+    if (!change) throw new Error(`No such corrigendum change: ${input.changeId}`)
+    const corrigendum = this.data.bidCorrigenda.find((c) => c.id === change.corrigendumId)!
+    const bid = this.requireBid(corrigendum.bidId)
+    const now = new Date().toISOString()
+
+    if (input.decision === 'accepted') {
+      const frozen = PROTECTED_VALUES_ENFORCED && this.data.protectedValues.some(
+        (p) => p.entityType === 'bid' && p.entityId === bid.id && p.fieldKey === change.fieldKey && p.frozen,
+      )
+      if (frozen) throw new Error(`"${change.fieldKey}" is frozen — unfreeze it before accepting this change.`)
+      if (normalizeChange(change).kind === 'clause') {
+        // A tender clause has no bid field to write — accepting just records the decision.
+      } else if (change.fieldKey === 'tenderLink') {
+        bid.tenderLink = change.proposedValue
+        bid.updatedAt = now
+      } else {
+        const milestone = this.data.bidMilestones.find((m) => m.bidId === bid.id && m.key === change.fieldKey)
+        if (milestone) {
+          milestone.dueAt = change.proposedValue
+          milestone.source = 'corrigendum'
+          milestone.updatedAt = now
+        }
+        if (change.fieldKey === 'submissionDeadline') {
+          const opp = this.data.opportunities.find((o) => o.id === bid.opportunityId)
+          if (opp) opp.submissionDate = change.proposedValue.slice(0, 10)
+        }
+      }
+    }
+
+    change.decision = input.decision
+    change.decidedAt = now
+    change.decidedBy = null
+
+    const stillPending = this.data.bidCorrigendumChanges.some(
+      (c) => c.corrigendumId === corrigendum.id && c.decision === 'pending',
+    )
+    if (!stillPending) {
+      corrigendum.status = 'reviewed'
+      corrigendum.reviewedAt = now
+      // Like the API, resolving every change does NOT clear needs_review — a person confirms it via markBidVerified.
+    }
+    return normalizeChange(change)
+  }
+
+  async listProtectedValues(entityType: string, entityId: string) {
+    return this.data.protectedValues.filter((p) => p.entityType === entityType && p.entityId === entityId)
+  }
+
+  async freezeValue(entityType: string, entityId: string, fieldKey: string) {
+    const now = new Date().toISOString()
+    const existing = this.data.protectedValues.find(
+      (p) => p.entityType === entityType && p.entityId === entityId && p.fieldKey === fieldKey,
+    )
+    if (existing) {
+      existing.frozen = true
+      existing.frozenAt = now
+      return
+    }
+    this.data.protectedValues.push({
+      id: uid('pv'), entityType, entityId, fieldKey, frozen: true, frozenAt: now, frozenBy: null,
+    })
+  }
+
+  async unfreezeValue(entityType: string, entityId: string, fieldKey: string, reason: string) {
+    if (!reason.trim()) throw new Error('A reason is required to unfreeze a value.')
+    const pv = this.data.protectedValues.find(
+      (p) => p.entityType === entityType && p.entityId === entityId && p.fieldKey === fieldKey,
+    )
+    if (!pv) return
+    pv.frozen = false
+    pv.frozenAt = null
+    pv.frozenBy = null
+  }
+
+  async requestDocumentUploadUrl(input: {
+    entityType: string; entityId: string; filename: string; contentType: string; sizeBytes: number; version?: string
+    batch?: DocumentBatch; category?: DocumentCategory
+  }) {
+    // Local dev has no object storage: the "upload URL" is a placeholder and
+    // the file bytes are never stored — only the metadata row.
+    if (!LOCAL_DOCUMENT_TYPES.includes(input.contentType)) throw new Error(`Unsupported file type: ${input.contentType}`)
+    if (!Number.isFinite(input.sizeBytes) || input.sizeBytes <= 0 || input.sizeBytes > LOCAL_DOCUMENT_MAX_BYTES) throw new Error('File exceeds the 50 MB limit.')
+    if ((input.batch !== undefined || input.category !== undefined)
+      && (normalizeDocumentFiling(input.batch, input.category).category !== input.category)) {
+      throw new Error('Choose a category that belongs to the selected batch.')
+    }
+    const uploadId = uid('upl')
+    pendingBidUploads.set(uploadId, input)
+    return { uploadId, uploadUrl: `local://bid-upload/${uploadId}` }
+  }
+
+  async confirmDocumentUpload(uploadId: string) {
+    const pending = pendingBidUploads.get(uploadId)
+    if (!pending) throw new Error(`No such upload: ${uploadId}`)
+    pendingBidUploads.delete(uploadId)
+    const doc: BidDocument = {
+      id: uid('doc'), entityType: pending.entityType, entityId: pending.entityId, filename: pending.filename,
+      storagePath: `local://${pending.entityType}/${pending.entityId}/${pending.filename}`,
+      version: pending.version ?? '1', contentType: pending.contentType, sizeBytes: pending.sizeBytes,
+      uploadedBy: null, uploadedAt: new Date().toISOString(),
+      ...normalizeDocumentFiling(pending.batch, pending.category),
+    }
+    this.data.bidDocuments = [...this.data.bidDocuments, doc]
+    return { ...doc }
+  }
+
+  async listDocuments(entityType: string, entityId: string) {
+    return this.data.bidDocuments
+      .filter((d) => d.entityType === entityType && d.entityId === entityId)
+      .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))
+      .map(withFiling)
+  }
+
+  async updateDocumentFiling(input: { id: string; batch: DocumentBatch; category: DocumentCategory }) {
+    const doc = this.data.bidDocuments.find((d) => d.id === input.id)
+    if (!doc) throw new Error(`No such document: ${input.id}`)
+    const filing = normalizeDocumentFiling(input.batch, input.category)
+    if (filing.batch !== input.batch || filing.category !== input.category) throw new Error('Choose a category that belongs to the selected batch.')
+    const updated = { ...doc, ...filing }
+    this.data.bidDocuments = this.data.bidDocuments.map((d) => (d.id === doc.id ? updated : d))
+    return { ...updated }
+  }
+
+  async deleteDocument(id: string) {
+    this.data.bidDocuments = this.data.bidDocuments.filter((d) => d.id !== id)
+    this.data.documentCitations = this.data.documentCitations.filter((c) => c.documentId !== id)
+  }
+
+  /** Local mode stores no file bytes, so there is nothing to open: the `local://` URL
+   *  tells the UI to say so instead of opening a dead link. */
+  async getDocumentDownloadUrl(id: string) {
+    const doc = this.data.bidDocuments.find((d) => d.id === id)
+    if (!doc) throw new Error(`No such document: ${id}`)
+    return doc.storagePath
+  }
+
+  async deleteDocumentCitation(id: string) {
+    this.data.documentCitations = this.data.documentCitations.filter((c) => c.id !== id)
+  }
+
+  async listDocumentCitations(documentId: string) {
+    return this.data.documentCitations.filter((c) => c.documentId === documentId)
+  }
+
+  async createDocumentCitation(input: { documentId: string; pageLabel: string; quoteText?: string; fieldRef?: string }) {
+    if (!this.data.bidDocuments.some((d) => d.id === input.documentId)) {
+      throw new Error(`No such document: ${input.documentId}`)
+    }
+    const citation: DocumentCitation = {
+      id: uid('cit'), documentId: input.documentId, pageLabel: input.pageLabel,
+      quoteText: input.quoteText ?? '', fieldRef: input.fieldRef ?? null, createdAt: new Date().toISOString(),
+    }
+    this.data.documentCitations.push(citation)
+    return citation
+  }
+
+  async listBidSavedViews() {
+    const system: BidSavedView[] = SYSTEM_BID_VIEWS.map((v) => ({
+      id: v.key, name: v.name, scope: 'global', ownerEmail: null, isSystem: true, sheet: 'all',
+      filterRules: v.filterRules, sort: [], visibleColumns: [], createdBy: null, createdAt: null, updatedAt: null,
+    }))
+    // Copies for the same reason as listBidCustomFields (in-place updates vs structural sharing).
+    return [...system, ...this.data.bidSavedViews.map((v) => ({ ...v, filterRules: [...v.filterRules], visibleColumns: [...v.visibleColumns] }))]
+  }
+
+  async createBidSavedView(input: {
+    name: string; scope: 'personal' | 'global'; sheet?: string
+    filterRules?: SystemBidViewFilterRule[]; sort?: unknown[]; visibleColumns?: string[]
+  }) {
+    const now = new Date().toISOString()
+    const view: BidSavedView = {
+      id: uid('bsv'), name: input.name, scope: input.scope, ownerEmail: null, isSystem: false, sheet: input.sheet ?? 'bidTracker',
+      filterRules: input.filterRules ?? [], sort: input.sort ?? [], visibleColumns: input.visibleColumns ?? [],
+      createdBy: null, createdAt: now, updatedAt: now,
+    }
+    this.data.bidSavedViews.push(view)
+    return view
+  }
+
+  async updateBidSavedView(
+    id: string,
+    patch: Partial<Pick<BidSavedView, 'name' | 'filterRules' | 'sort' | 'visibleColumns'>>,
+  ) {
+    if (SYSTEM_BID_VIEW_KEYS.has(id)) throw new Error('System views cannot be edited.')
+    const view = this.data.bidSavedViews.find((v) => v.id === id)
+    if (!view) throw new Error(`No such view: ${id}`)
+    Object.assign(view, patch, { updatedAt: new Date().toISOString() })
+    return view
+  }
+
+  async deleteBidSavedView(id: string) {
+    if (SYSTEM_BID_VIEW_KEYS.has(id)) throw new Error('System views cannot be deleted.')
+    this.data.bidSavedViews = this.data.bidSavedViews.filter((v) => v.id !== id)
+  }
+
+  // --- Live Bids: custom columns (spec §8.1) — same rules as the backend's
+  // bidCustomFields router, using the same @goms/domain helpers. ------------
+
+  private auditCustom(entry: { entityType: string; entityId: string; field: string; oldValue: string; newValue: string; action: string; reason?: string }) {
+    writeAuditLogEntry(this.data.commercialCalculator, { reason: '', changedBy: null, ...entry })
+  }
+
+  private requireCustomField(id: string): BidCustomField {
+    const field = this.data.bidCustomFields.find((f) => f.id === id)
+    if (!field) throw new Error('No such custom column.')
+    return field
+  }
+
+  private assertActiveNameFree(name: string, exceptId?: string) {
+    const folded = name.trim().toLowerCase()
+    const clash = this.data.bidCustomFields.some(
+      (f) => f.status === 'active' && f.id !== exceptId && f.name.trim().toLowerCase() === folded,
+    )
+    if (clash) throw new Error(`A column named "${name.trim()}" already exists.`)
+  }
+
+  async listBidCustomFields(includeArchived = false) {
+    // Copies, not the live stored objects: other methods mutate them in place,
+    // and react-query's structural sharing would otherwise see "no change" after
+    // a rename/archive and never re-render anything reading this list.
+    const fields = this.data.bidCustomFields
+      .filter((f) => includeArchived || f.status === 'active')
+      .map((f) => ({ ...f, options: f.options ? [...f.options] : null }))
+      .sort((a, b) => a.position - b.position || a.createdAt.localeCompare(b.createdAt))
+    return withSystemOptions(fields, this.bidOptionLookups())
+  }
+
+  async createBidCustomField(input: { name: string; dataType: CustomFieldType; options?: string[]; sheet?: BidCustomField['sheet'] }) {
+    const name = input.name.trim()
+    if (!name || name.length > 80) throw new Error('A column name must be 1–80 characters.')
+    let options: string[] | null = null
+    if (hasOptions(input.dataType)) options = normalizeOptions(input.options ?? [])
+    else if (input.options !== undefined) throw new Error('Only a select or multi-select column has options.')
+    this.assertActiveNameFree(name)
+    const now = new Date().toISOString()
+    const field: BidCustomField = {
+      id: uid('bcf'),
+      key: slugifyFieldKey(name, new Set(this.data.bidCustomFields.map((f) => f.key))),
+      name, dataType: input.dataType, options, hasHeldValue: false, sheet: input.sheet ?? 'bidTracker',
+      position: this.data.bidCustomFields.reduce((max, f) => Math.max(max, f.position), -1) + 1,
+      status: 'active', createdBy: null, updatedBy: null, createdAt: now, updatedAt: now,
+    }
+    this.data.bidCustomFields.push(field)
+    this.auditCustom({ entityType: 'bidCustomField', entityId: field.id, field: 'name', oldValue: '', newValue: name, action: 'custom_field_created' })
+    return field
+  }
+
+  async updateBidCustomField(id: string, patch: UpdateBidCustomFieldPatch) {
+    const field = this.requireCustomField(id)
+    if (bidSystemField(field.key)) throw new Error(`"${field.name}" is a built-in Live Bids field; edit its options in Settings > Masters > Live Bids.`)
+    if (patch.expectedDataType && patch.expectedDataType !== field.dataType) throw new Error('This column changed in another session. Reopen Change data type and try again.')
+    const nextType = patch.dataType ?? field.dataType
+    if (!CUSTOM_FIELD_TYPES.includes(nextType)) throw new Error('Unknown column data type.')
+    const typeChanged = nextType !== field.dataType
+    const kept = customTypesCompatible(field.dataType, nextType)
+    const held = this.data.bidCustomFieldValues.filter(value => value.fieldId === id)
+    if (typeChanged && !kept && held.length && !patch.resetValues) throw new Error('Changing to an unrelated data type requires resetting its values.')
+    // Validate the complete change before mutating anything (including a simultaneous rename).
+    const nextName = patch.name?.trim() ?? field.name
+    if (!nextName || nextName.length > 80) throw new Error('A column name must be 1–80 characters.')
+    if (field.status === 'active') this.assertActiveNameFree(nextName, id)
+    if (patch.options !== undefined && !hasOptions(nextType)) throw new Error('Only a select or multi-select column has options.')
+    const nextOptions = hasOptions(nextType)
+      ? normalizeOptions(patch.options ?? (hasOptions(field.dataType) ? field.options ?? [] : [])) : null
+    const converted = typeChanged ? held.map(value => ({ entry: value, next: convertCustomFieldValue(field.dataType, nextType, value.value) })) : []
+    const now = new Date().toISOString()
+    if (patch.name !== undefined && patch.name.trim() !== field.name) {
+      const name = patch.name.trim()
+      if (!name || name.length > 80) throw new Error('A column name must be 1–80 characters.')
+      if (field.status === 'active') this.assertActiveNameFree(name, id)
+      this.auditCustom({ entityType: 'bidCustomField', entityId: id, field: 'name', oldValue: field.name, newValue: name, action: 'custom_field_renamed' })
+      field.name = name
+      field.updatedAt = now
+    }
+    if (typeChanged) {
+      this.auditCustom({ entityType: 'bidCustomField', entityId: id, field: 'dataType', oldValue: field.dataType, newValue: nextType, reason: kept ? 'Compatible values retained' : `${held.length} values reset`, action: 'custom_field_type_changed' })
+      for (const { entry, next } of converted) {
+        if (entry.value !== next) this.auditCustom({ entityType: 'bidCustomFieldValue', entityId: entry.bidId, field: field.key, oldValue: String(entry.value ?? ''), newValue: String(next ?? ''), reason: `Column data type changed to ${nextType}`, action: next === null ? 'custom_value_cleared' : 'custom_value_set' })
+        if (next !== null) { entry.value = next; entry.updatedAt = now }
+        this.requireBid(entry.bidId).updatedAt = now
+      }
+      const cleared = new Set(converted.filter(value => value.next === null).map(value => value.entry))
+      this.data.bidCustomFieldValues = this.data.bidCustomFieldValues.filter(value => !cleared.has(value))
+      field.dataType = nextType
+      field.updatedAt = now
+    }
+    if (typeChanged || patch.options !== undefined) {
+      const next = nextOptions
+      const prev = field.options ?? []
+      if (JSON.stringify(prev) !== JSON.stringify(next)) {
+        const removed = prev.filter((o) => !next?.includes(o))
+        this.auditCustom({
+          entityType: 'bidCustomField', entityId: id, field: 'options', oldValue: JSON.stringify(prev), newValue: JSON.stringify(next),
+          reason: removed.length ? `Removed: ${removed.join(', ')} (existing values kept)` : '', action: 'custom_field_options_changed',
+        })
+        field.options = next
+        field.updatedAt = now
+      }
+    }
+    return field
+  }
+
+  async reorderBidCustomFields(ids: string[]) {
+    const active = this.data.bidCustomFields.filter((f) => f.status === 'active')
+    const activeIds = new Set(active.map((f) => f.id))
+    if (ids.length !== activeIds.size || new Set(ids).size !== ids.length || !ids.every((id) => activeIds.has(id))) {
+      throw new Error('ids must be exactly the current active columns, each once.')
+    }
+    for (const [index, id] of ids.entries()) {
+      const field = this.requireCustomField(id)
+      if (field.position === index) continue
+      this.auditCustom({
+        entityType: 'bidCustomField', entityId: id, field: 'position', oldValue: String(field.position), newValue: String(index),
+        action: 'custom_field_reordered',
+      })
+      field.position = index
+      field.updatedAt = new Date().toISOString()
+    }
+    return this.listBidCustomFields()
+  }
+
+  async archiveBidCustomField(id: string) {
+    const field = this.requireCustomField(id)
+    if (field.status === 'archived') return field
+    field.status = 'archived'
+    field.updatedAt = new Date().toISOString()
+    this.auditCustom({
+      entityType: 'bidCustomField', entityId: id, field: 'status', oldValue: 'active', newValue: 'archived',
+      reason: 'Values are kept', action: 'custom_field_archived',
+    })
+    return field
+  }
+
+  async unarchiveBidCustomField(id: string) {
+    const field = this.requireCustomField(id)
+    if (field.status === 'active') return field
+    if (this.data.bidCustomFields.some((f) => f.status === 'active' && f.name.trim().toLowerCase() === field.name.trim().toLowerCase())) {
+      throw new Error(`Another active column is already named "${field.name}" — rename one of them first.`)
+    }
+    field.status = 'active'
+    field.updatedAt = new Date().toISOString()
+    this.auditCustom({ entityType: 'bidCustomField', entityId: id, field: 'status', oldValue: 'archived', newValue: 'active', action: 'custom_field_unarchived' })
+    return field
+  }
+
+  async deleteBidCustomField(id: string, withValues = false) {
+    const field = this.requireCustomField(id)
+    if (bidSystemField(field.key)) throw new Error(`"${field.name}" is a built-in Live Bids field; it cannot be deleted. Hide it from Manage columns instead.`)
+    const valueCount = this.data.bidCustomFieldValues.filter((v) => v.fieldId === id).length
+    // Without the explicit `withValues` confirmation a column that ever held a value is archive-only.
+    if ((field.hasHeldValue || valueCount > 0) && !withValues) {
+      throw new Error('This column has values — archive it instead, or delete it together with its values.')
+    }
+    this.data.bidCustomFieldValues = this.data.bidCustomFieldValues.filter((v) => v.fieldId !== id)
+    this.data.bidCustomFields = this.data.bidCustomFields.filter((f) => f.id !== id)
+    this.auditCustom({
+      entityType: 'bidCustomField', entityId: id, field: 'name', oldValue: field.name, newValue: '',
+      reason: valueCount > 0 ? `Deleted with ${valueCount} value${valueCount === 1 ? '' : 's'}` : withValues && field.hasHeldValue ? 'Deleted (its values had been cleared)' : 'Never held a value', action: 'custom_field_deleted',
+    })
+  }
+
+  async setBidCustomValue(bidId: string, fieldId: string, raw: string | number | boolean | null) {
+    const field = this.requireCustomField(fieldId)
+    if (field.status === 'archived') throw new Error('This column is archived.')
+    this.requireBid(bidId)
+    const options = resolveSystemOptions(field.key, this.bidOptionLookups())?.options ?? field.options
+    const value = coerceCustomValue(field.dataType, raw, options)
+    this.assertEntityExists(field.dataType, value)
+    const existing = this.data.bidCustomFieldValues.find((v) => v.bidId === bidId && v.fieldId === fieldId)
+    const oldValue: CustomValue = existing?.value ?? null
+    // An entity column logs the entity's name, not the stored id/code.
+    const text = (v: CustomValue) => (v === null ? '' : this.entityName(field.dataType, v) ?? String(v))
+    // entityId is the BID so the edit shows in that bid's Activity History.
+    const audit = (action: string) => this.auditCustom({
+      entityType: 'bidCustomFieldValue', entityId: bidId, field: field.key, oldValue: text(oldValue), newValue: text(value), action,
+    })
+    const touch = () => { this.requireBid(bidId).updatedAt = new Date().toISOString() }
+
+    if (value === null) {
+      if (existing) {
+        this.data.bidCustomFieldValues = this.data.bidCustomFieldValues.filter((v) => v !== existing)
+        audit('custom_value_cleared')
+        touch()
+        this.syncFieldToMilestone(bidId, field.key, null)
+      }
+      return { bidId, fieldId, key: field.key, value: null as CustomValue }
+    }
+    field.hasHeldValue = true
+    const now = new Date().toISOString()
+    if (existing) {
+      existing.value = value
+      existing.updatedAt = now
+    } else {
+      const row: BidCustomFieldValue = { bidId, fieldId, value, updatedAt: now }
+      this.data.bidCustomFieldValues.push(row)
+    }
+    if (oldValue !== value) {
+      audit('custom_value_set')
+      touch()
+      this.syncFieldToMilestone(bidId, field.key, value)
+    }
+    return { bidId, fieldId, key: field.key, value }
+  }
+
+  private entityName(type: CustomFieldType, value: CustomValue): string | null {
+    if (value === null) return null
+    if (type === 'person') {
+      // One id, or several (a "Multiple" person column stores a JSON list): every one must exist.
+      // An Amnex employee (Org Structure) or, for older values and Sales-only people, the Sales roster.
+      const names = parseMultiValue(value).map((id) =>
+        this.data.orgPeople.find((p) => p.id === id)?.name ?? this.data.salesPersons.find((p) => p.id === id)?.name)
+      return names.length && names.every(Boolean) ? names.join(', ') : null
+    }
+    if (type === 'department') return this.data.nodes.find((n) => n.domain === 'org' && n.typeKey === 'department' && n.id === value)?.name ?? null
+    if (type === 'state') return this.data.nodes.find((n) => n.typeKey === 'state' && n.stateCode === Number(value))?.name ?? null
+    return null
+  }
+
+  private assertEntityExists(type: CustomFieldType, value: CustomValue) {
+    if (value === null || !ENTITY_FIELD_TYPES.includes(type)) return
+    if (this.entityName(type, value) === null) throw new Error(`That ${type} does not exist.`)
+  }
+
+  async listBidCustomValues(bidId: string) {
+    const out: Record<string, CustomValue> = {}
+    for (const v of this.data.bidCustomFieldValues) {
+      if (v.bidId !== bidId) continue
+      const field = this.data.bidCustomFields.find((f) => f.id === v.fieldId)
+      if (field?.status === 'active') out[field.key] = v.value
+    }
+    return out
+  }
+
+  async listPeopleColumnConfigs(): Promise<Record<string, PeopleColumnConfig>> {
+    return structuredClone(this.data.peopleColumnConfigs ?? {})
+  }
+
+  async setPeopleColumnConfig(columnId: string, config: PeopleColumnConfig | null): Promise<void> {
+    const id = assertPeopleColumnId(columnId)
+    const next = config ? normalizePeopleColumnConfig(config) : null
+    const { [id]: _previous, ...rest } = this.data.peopleColumnConfigs ?? {}
+    this.data.peopleColumnConfigs = next && !isEmptyPeopleColumnConfig(next) ? { ...rest, [id]: next } : rest
+  }
+
+  async listSalesPersons() {
+    return [...this.data.salesPersons].sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  async getSalesPerson(id: string) {
+    return this.data.salesPersons.find((p) => p.id === id) ?? null
+  }
+
+  async listSalesPostings(salesPersonId: string) {
+    return this.data.salesPostings
+      .filter((p) => p.salesPersonId === salesPersonId)
+      .sort((a, b) => b.startDate.localeCompare(a.startDate))
+  }
+
+  async currentPostings() {
+    const out: Record<string, SalesPosting> = {}
+    for (const p of this.data.salesPostings) {
+      if (p.endDate === null) out[p.salesPersonId] = p
+    }
+    return out
+  }
+
+  /** The slices ownership resolution walks. Rebuilt per call rather than
+   *  cached: these arrays are mutated in place by other methods, so a cached
+   *  context would silently go stale. */
+  private ownershipContext(): OwnershipContext {
+    return { nodes: this.data.nodes, employees: this.data.employees, opportunities: this.data.opportunities, bids: this.data.bids }
+  }
+
+  async listOwnershipAssignments() {
+    return [...this.data.ownershipAssignments].sort((a, b) => b.startDate.localeCompare(a.startDate))
+  }
+
+  async listOwnershipFor(entityType: string, entityId: string) {
+    return this.data.ownershipAssignments
+      .filter((a) => a.entityType === entityType && a.entityId === entityId)
+      .sort((a, b) => b.startDate.localeCompare(a.startDate))
+  }
+
+  async listOwnedBy(salesPersonId: string, asOf: string) {
+    return this.data.ownershipAssignments.filter(
+      (a) => a.salesPersonId === salesPersonId && coversDate(a, asOf),
+    )
+  }
+
+  async createSalesPerson(input: CreateSalesPersonInput) {
+    const person: SalesPerson = {
+      id: uid('sp'),
+      employeeCode: '',
+      name: input.name,
+      officialEmail: input.officialEmail,
+      personalEmail: input.personalEmail ?? '',
+      mobile: input.mobile ?? '',
+      altMobile: input.altMobile ?? '',
+      joinedOn: null,
+      leftOn: null,
+      status: 'active',
+      photoUrl: input.photoUrl ?? null,
+      notes: input.notes ?? '',
+      metadata: {},
+      createdAt: isoToday(),
+      createdBy: null,
+    }
+    this.data.salesPersons.push(person)
+    this.data.salesPostings.push({
+      id: uid('spost'),
+      salesPersonId: person.id,
+      designation: input.designation,
+      tierKey: input.tierKey,
+      managerId: input.managerId ?? null,
+      gmOverrideId: null,
+      office: '',
+      startDate: isoToday(),
+      endDate: null,
+      changeType: 'initial',
+      reason: '',
+      createdAt: isoToday(),
+      createdBy: null,
+    })
+    return person
+  }
+
+  /** Closes the current open posting and opens a new one — a promotion,
+   *  demotion, or lateral move, per spec §6.3. `changeType` is derived from
+   *  comparing tier rank across the two postings, never typed by the caller. */
+  async transferSalesPerson(input: TransferSalesPersonInput) {
+    const person = this.data.salesPersons.find((p) => p.id === input.salesPersonId)
+    if (!person) throw new Error(`No such salesperson: ${input.salesPersonId}`)
+
+    const current = this.data.salesPostings.find(
+      (p) => p.salesPersonId === input.salesPersonId && p.endDate === null,
+    )
+    if (current) {
+      if (input.effectiveDate <= current.startDate) {
+        throw new Error(`The current posting starts on ${current.startDate}; a transfer must take effect after that.`)
+      }
+      current.endDate = input.effectiveDate
+    }
+
+    const oldRank = current ? tierRank(current.tierKey) : null
+    const newRank = tierRank(input.tierKey)
+    const changeType: SalesPosting['changeType'] =
+      oldRank === null ? 'initial' : newRank < oldRank ? 'promotion' : newRank > oldRank ? 'demotion' : 'lateralMove'
+
+    const posting: SalesPosting = {
+      id: uid('spost'),
+      salesPersonId: input.salesPersonId,
+      designation: input.designation,
+      tierKey: input.tierKey,
+      managerId: input.managerId ?? null,
+      // A reorg/promotion is exactly the kind of change that should force a
+      // fresh look at who the GM really is — never silently carry a stale
+      // override from the closed posting into the new one.
+      gmOverrideId: null,
+      office: input.office ?? '',
+      startDate: input.effectiveDate,
+      endDate: null,
+      changeType,
+      reason: input.reason ?? '',
+      createdAt: isoToday(),
+      createdBy: null,
+    }
+    this.data.salesPostings.push(posting)
+    return posting
+  }
+
+  /** In-place manager/GM-override change on the currently-open posting —
+   *  distinct from `transferSalesPerson`, which closes the current posting
+   *  and opens a new one. Does not touch designation/tier/start-end
+   *  dates/changeType. */
+  async updatePostingManager(personId: string, patch: { managerId?: string | null; gmOverrideId?: string | null }) {
+    const posting = this.data.salesPostings.find((p) => p.salesPersonId === personId && p.endDate === null)
+    if (!posting) throw new Error(`No open posting for salesperson: ${personId}`)
+    if ('managerId' in patch) posting.managerId = patch.managerId ?? null
+    if ('gmOverrideId' in patch) posting.gmOverrideId = patch.gmOverrideId ?? null
+    return posting
+  }
+
+  async updatePostingDates(postingId: string, edit: PostingDatesEdit) {
+    const posting = this.data.salesPostings.find((p) => p.id === postingId)
+    if (!posting) throw new Error('That posting no longer exists.')
+    const siblings = this.data.salesPostings.filter((p) => p.salesPersonId === posting.salesPersonId)
+    const plan = planPostingDatesEdit(siblings, postingId, edit)
+    if (plan.previous) {
+      const prev = siblings.find((p) => p.id === plan.previous!.id)!
+      prev.endDate = plan.previous.endDate
+    }
+    posting.startDate = plan.startDate
+    posting.endDate = plan.endDate
+    return posting
+  }
+
+  async updateSalesPerson(id: string, patch: Partial<SalesPerson>) {
+    const person = this.data.salesPersons.find((p) => p.id === id)
+    if (!person) throw new Error(`No such salesperson: ${id}`)
+    const codeChanged = patch.employeeCode !== undefined && patch.employeeCode.trim() !== person.employeeCode
+    const employeeCode = codeChanged ? this.checkedEmployeeNumber(patch.employeeCode, patch.officialEmail ?? person.officialEmail, { salesId: id }) ?? '' : undefined
+    Object.assign(person, patch, employeeCode !== undefined ? { employeeCode } : {})
+    return person
+  }
+
+  async setSalesPersonStatus(id: string, status: SalesPerson['status']) {
+    const person = this.data.salesPersons.find((p) => p.id === id)
+    if (person) person.status = status
+  }
+
+  async deleteSalesPerson(id: string) {
+    this.data.salesPersons = this.data.salesPersons.filter((p) => p.id !== id)
+    this.data.salesPostings = this.data.salesPostings.filter((p) => p.salesPersonId !== id)
+    this.data.ownershipAssignments = this.data.ownershipAssignments.filter((a) => a.salesPersonId !== id)
+  }
+
+  async listMaster<K extends MasterEntityKey>(key: K) {
+    return listMasterLogic(this.data.commercialCalculator, key)
+  }
+
+  async getMaster<K extends MasterEntityKey>(key: K, id: string) {
+    return getMasterLogic(this.data.commercialCalculator, key, id)
+  }
+
+  async createMaster<K extends MasterEntityKey>(key: K, input: CreateMasterInput<K>) {
+    const row = createMasterLogic(this.data.commercialCalculator, key, input)
+    // A new external category takes the next unallocated ID range; re-adding an old code keeps its old range.
+    if (key === 'directoryTypes') this.data.directoryIdRanges = [...ensureCategoryRanges(this.data.directoryIdRanges, [(row as { code: string }).code])]
+    return row
+  }
+
+  async updateMaster<K extends MasterEntityKey>(key: K, id: string, patch: Partial<MasterRowMap[K]>, changeReason?: string) {
+    if (key === 'directoryTypes') {
+      const code = (patch as { code?: string }).code
+      const current = listMasterLogic(this.data.commercialCalculator, 'directoryTypes').find((t) => t.id === id)
+      if (code !== undefined && current && code.trim().toLowerCase() !== current.code.trim().toLowerCase()) {
+        throw new Error("A Directory Type's code can't change: its ID range is tied to it. Rename it instead.")
+      }
+    }
+    this.assertBidStageChange(key, id, { code: (patch as { code?: string }).code, active: (patch as { active?: boolean }).active })
+    const before = key === 'verticals' ? listMasterLogic(this.data.commercialCalculator, 'verticals').find((v) => v.id === id)?.name : undefined
+    const bidBefore = isBidTrackerMasterKey(key) ? listMasterLogic(this.data.commercialCalculator, key).find((v) => v.id === id)?.name : undefined
+    const updated = await updateMasterLogic(this.data.commercialCalculator, key, id, patch, changeReason)
+    const bidAfter = (updated as { name?: string }).name
+    // Live Bids dropdown values are stored on bids by NAME: a rename follows onto every bid.
+    if (bidBefore && bidAfter && bidBefore !== bidAfter) this.cascadeBidMasterRename(key, bidBefore, bidAfter)
+    // Verticals master drives opportunity.vertical by NAME: a rename follows onto every opportunity.
+    const after = (updated as { name?: string }).name
+    if (before && after && before !== after) {
+      this.data.opportunities = this.data.opportunities.map((o) => (o.vertical.trim().toLowerCase() === before.trim().toLowerCase() ? { ...o, vertical: after } : o))
+    }
+    return updated
+  }
+
+  async setMasterActive(key: MasterEntityKey, id: string, active: boolean) {
+    this.assertBidStageChange(key, id, { active })
+    return setMasterActiveLogic(this.data.commercialCalculator, key, id, active)
+  }
+
+  /** Settings > Masters > Live Bids > Bid Stages: codes are stored on bids, built-in stages stay (bids.ts). */
+  private assertBidStageChange(key: MasterEntityKey, id: string, change: { code?: string; active?: boolean; remove?: boolean }) {
+    if (key !== 'bidStages') return
+    const stage = listMasterLogic(this.data.commercialCalculator, 'bidStages').find((s) => s.id === id)
+    const inUse = stage && change.remove ? this.data.bids.filter((b) => b.stageKey === stage.code).length : 0
+    const error = stage && bidStageChangeError(stage, { ...change, inUse })
+    if (error) throw new Error(error)
+  }
+
+  private bidMasterValues(masterKey: string) {
+    const ids = new Set(this.data.bidCustomFields.filter(f => fieldsUsingMaster(masterKey).some(s => s.key === f.key)).map(f => f.id))
+    return this.data.bidCustomFieldValues.filter(v => ids.has(v.fieldId))
+  }
+  private cascadeBidMasterRename(masterKey: string, from: string, to: string) {
+    for (const v of this.bidMasterValues(masterKey)) {
+      if (v.value === from) v.value = to
+      else if (typeof v.value === 'string' && v.value.startsWith('[')) {
+        const items = parseMultiValue(v.value)
+        if (items.includes(from)) v.value = JSON.stringify(items.map(i => (i === from ? to : i)))
+      }
+    }
+  }
+
+  async deleteMaster(key: MasterEntityKey, id: string) {
+    this.assertBidStageChange(key, id, { remove: true })
+    if (isBidTrackerMasterKey(key)) {
+      const name = listMasterLogic(this.data.commercialCalculator, key).find((v) => v.id === id)?.name
+      const used = name ? new Set(this.bidMasterValues(key).filter(v => v.value === name || (typeof v.value === 'string' && v.value.startsWith('[') && parseMultiValue(v.value).includes(name))).map(v => v.bidId)).size : 0
+      // A value held by any bid is never deleted — deactivate it instead (it stays on those bids).
+      if (used) throw new Error(`"${name}" is used by ${used} bid${used === 1 ? '' : 's'} — deactivate it instead of deleting.`)
+    }
+    return deleteMasterLogic(this.data.commercialCalculator, key, id)
+  }
+
+  async listEditionFeatures(editionId: string) {
+    return listEditionFeaturesLogic(this.data.commercialCalculator, editionId)
+  }
+
+  async setEditionFeatures(editionId: string, rows: { featureId: string; mandatory: boolean }[]) {
+    return setEditionFeaturesLogic(this.data.commercialCalculator, editionId, rows)
+  }
+
+  async listSkus() {
+    return listSkusLogic(this.data.commercialCalculator)
+  }
+
+  async getSku(id: string) {
+    return getSkuLogic(this.data.commercialCalculator, id)
+  }
+
+  async createSku(input: CreateSkuInput) {
+    return createSkuLogic(this.data.commercialCalculator, input)
+  }
+
+  async updateSku(id: string, patch: Partial<CommercialSku>, changeReason?: string) {
+    return updateSkuLogic(this.data.commercialCalculator, id, patch, changeReason)
+  }
+
+  async deleteSku(id: string) {
+    return deleteSkuLogic(this.data.commercialCalculator, id)
+  }
+
+  async listBomItemsForSku(parentSkuId: string) {
+    return listBomItemsForSkuLogic(this.data.commercialCalculator, parentSkuId)
+  }
+
+  async listAllBomItems() {
+    return listAllBomItemsLogic(this.data.commercialCalculator)
+  }
+
+  async createBomItem(input: CreateBomItemInput) {
+    return createBomItemLogic(this.data.commercialCalculator, input)
+  }
+
+  async updateBomItem(id: string, patch: Partial<CommercialBomItem>) {
+    return updateBomItemLogic(this.data.commercialCalculator, id, patch)
+  }
+
+  async deleteBomItem(id: string) {
+    return deleteBomItemLogic(this.data.commercialCalculator, id)
+  }
+
+  async listBoqs() {
+    return listBoqsLogic(this.data.commercialCalculator)
+  }
+
+  async getBoq(id: string) {
+    return getBoqLogic(this.data.commercialCalculator, id)
+  }
+
+  async listBoqLineItems(boqId: string) {
+    return listBoqLineItemsLogic(this.data.commercialCalculator, boqId)
+  }
+
+  async listAllBoqLineItems() {
+    return listAllBoqLineItemsLogic(this.data.commercialCalculator)
+  }
+
+  async createBoq(input: CreateBoqInput) {
+    return createBoqLogic(this.data.commercialCalculator, input)
+  }
+
+  async updateBoq(id: string, patch: UpdateBoqInput) {
+    return updateBoqLogic(this.data.commercialCalculator, id, patch)
+  }
+
+  async addBoqLineItem(boqId: string, input: CreateBoqLineItemInput) {
+    return addBoqLineItemLogic(this.data.commercialCalculator, boqId, input)
+  }
+
+  async updateBoqLineItem(
+    id: string,
+    patch: Partial<Pick<CommercialBoqLineItem,
+      'quantity' | 'unitPrice' | 'discountPct' | 'approverId' | 'approvalDate' | 'approvalRemarks' | 'approvalStatus'
+      | 'pricingLevels' | 'activePricingLevel'
+    >>,
+  ) {
+    return updateBoqLineItemLogic(this.data.commercialCalculator, id, patch)
+  }
+
+  async removeBoqLineItem(id: string) {
+    return removeBoqLineItemLogic(this.data.commercialCalculator, id)
+  }
+
+  async reorderBoqLineItems(boqId: string, orderedIds: string[]) {
+    return reorderBoqLineItemsLogic(this.data.commercialCalculator, boqId, orderedIds)
+  }
+
+  async updateBoqStatus(id: string, nextStatus: BoqStatus, changeReason: string) {
+    return updateBoqStatusLogic(this.data.commercialCalculator, id, nextStatus, changeReason)
+  }
+
+  async reviseBoq(id: string) {
+    return reviseBoqLogic(this.data.commercialCalculator, id)
+  }
+
+  async duplicateBoq(id: string) {
+    return duplicateBoqLogic(this.data.commercialCalculator, id)
+  }
+
+  async deleteBoq(id: string) {
+    return deleteBoqLogic(this.data.commercialCalculator, id)
+  }
+
+  async listAuditLogs(filter?: { entityType?: string; entityId?: string }) {
+    return listAuditLogsLogic(this.data.commercialCalculator, filter)
+  }
+
+  async resolveOwner(entityType: string, entityId: string, asOf: string) {
+    return effectiveOwner(this.data.ownershipAssignments, entityType, entityId, asOf, this.ownershipContext())
+  }
+
+  async resolveOwners(entityType: string, entityIds: string[], asOf: string) {
+    const map = buildOwnerMap(this.data.ownershipAssignments, entityType, entityIds, asOf, this.ownershipContext())
+    return Object.fromEntries(map)
+  }
+
+  async assignOwner(input: AssignOwnerInput) {
+    const role = input.role ?? 'owner'
+    // Invariants are rejected writes, not warnings: a warning means the bad
+    // data is already stored (spec §8).
+    if (!this.data.salesPersons.some((p) => p.id === input.salesPersonId)) {
+      throw new Error(`No such salesperson: ${input.salesPersonId}`)
+    }
+    if (!OWNABLE_ENTITY_MAP[input.entityType]) {
+      throw new Error(`Not an ownable entity type: ${input.entityType}`)
+    }
+    if (role === 'delegate' && !input.endDate) {
+      throw new Error('A delegation must have an end date')
+    }
+    if (input.endDate && input.endDate <= input.startDate) {
+      throw new Error('An assignment cannot end on or before it starts')
+    }
+
+    // One open owner per entity. Reassigning closes the incumbent at the new
+    // start date, which keeps the two intervals exactly adjacent — no gap, no
+    // overlap — because the end is exclusive.
+    if (role === 'owner') {
+      for (const a of this.data.ownershipAssignments) {
+        if (a.entityType !== input.entityType || a.entityId !== input.entityId) continue
+        if (a.role !== 'owner' || a.endDate !== null) continue
+        if (input.startDate <= a.startDate) {
+          throw new Error(
+            `The current owner's assignment starts on ${a.startDate}; a replacement must start after that.`,
+          )
+        }
+        a.endDate = input.startDate
+      }
+    }
+
+    const row: OwnershipAssignment = {
+      id: uid('own'),
+      entityType: input.entityType,
+      entityId: input.entityId,
+      salesPersonId: input.salesPersonId,
+      role,
+      startDate: input.startDate,
+      endDate: input.endDate ?? null,
+      reason: input.reason ?? 'initial',
+      batchId: null,
+      note: input.note ?? '',
+      createdAt: isoToday(),
+      createdBy: null,
+    }
+    this.data.ownershipAssignments.push(row)
+    return row
+  }
+
+  async endOwnership(id: string, endDate: string) {
+    const a = this.data.ownershipAssignments.find((x) => x.id === id)
+    if (!a) return
+    if (endDate <= a.startDate) {
+      throw new Error('An assignment cannot end on or before it starts')
+    }
+    a.endDate = endDate
+  }
+
+  async transferBookOfBusiness(input: TransferBookOfBusinessInput) {
+    if (!this.data.salesPersons.some((p) => p.id === input.fromSalesPersonId)) {
+      throw new Error(`No such salesperson: ${input.fromSalesPersonId}`)
+    }
+    if (!this.data.salesPersons.some((p) => p.id === input.toSalesPersonId)) {
+      throw new Error(`No such salesperson: ${input.toSalesPersonId}`)
+    }
+    if (input.toSalesPersonId === input.fromSalesPersonId) {
+      throw new Error('Cannot transfer a book of business to the same person')
+    }
+
+    // Only currently-open owner rows that actually started before the
+    // handoff — an assignment that starts on or after it can't be closed by
+    // it without violating the half-open-interval invariant, so it's left
+    // alone rather than silently failing the whole batch over one edge case.
+    const open = this.data.ownershipAssignments.filter(
+      (a) => a.salesPersonId === input.fromSalesPersonId && a.role === 'owner'
+        && a.endDate === null && a.startDate < input.effectiveDate,
+    )
+
+    const batchId = uid('batch')
+    const created: OwnershipAssignment[] = []
+    for (const a of open) {
+      a.endDate = input.effectiveDate
+      const row: OwnershipAssignment = {
+        id: uid('own'),
+        entityType: a.entityType,
+        entityId: a.entityId,
+        salesPersonId: input.toSalesPersonId,
+        role: 'owner',
+        startDate: input.effectiveDate,
+        endDate: null,
+        reason: 'transfer',
+        batchId,
+        note: input.note ?? '',
+        createdAt: isoToday(),
+        createdBy: null,
+      }
+      this.data.ownershipAssignments.push(row)
+      created.push(row)
+    }
+    return created
+  }
+
+  async listFollowUps(entityType: string, entityId: string) {
+    return this.data.followUps
+      .filter((f) => f.entityType === entityType && f.entityId === entityId)
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+  }
+
+  async listOpenFollowUps() {
+    return this.data.followUps
+      .filter((f) => f.status === 'open')
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+  }
+
+  async createFollowUp(input: CreateFollowUpInput) {
+    if (!isIsoDateOrTime(input.dueDate)) throw new Error('Enter a valid date and optional time.')
+    const followUp: FollowUp = {
+      id: uid('fup'),
+      entityType: input.entityType,
+      entityId: input.entityId,
+      assigneeId: input.assigneeId ?? null,
+      dueDate: input.dueDate,
+      status: 'open',
+      note: input.note ?? '',
+      createdAt: isoToday(),
+      createdBy: null,
+    }
+    this.data.followUps.push(followUp)
+    return followUp
+  }
+
+  async setFollowUpStatus(id: string, status: FollowUp['status']) {
+    const f = this.data.followUps.find((x) => x.id === id)
+    if (f) f.status = status
+  }
+
+  async deleteFollowUp(id: string) {
+    this.data.followUps = this.data.followUps.filter((f) => f.id !== id)
+  }
+
+  async listWhatsAppLinks(opportunityId?: string) {
+    return (this.data.whatsappLinks ?? []).filter((link) => opportunityId === undefined || link.opportunityId === opportunityId).sort((a, b) => b.sentAt.localeCompare(a.sentAt))
+  }
+
+  async addWhatsAppLink(input: AddWhatsAppLinkInput) {
+    const links = (this.data.whatsappLinks ??= [])
+    const existing = links.find((link) => link.opportunityId === input.opportunityId && link.messageId === input.messageId)
+    if (existing) return { link: existing, created: false }
+    const link: WhatsAppLink = { ...input, id: uid('wal'), addedAt: new Date().toISOString() }
+    links.push(link)
+    return { link, created: true }
+  }
+
+  async removeWhatsAppLink(id: string) {
+    this.data.whatsappLinks = (this.data.whatsappLinks ?? []).filter((link) => link.id !== id)
+  }
+
+  async updateWhatsAppLink(id: string, patch: Partial<Pick<WhatsAppLink, 'senderName' | 'senderPhone' | 'body' | 'addedBy' | 'file'>>) {
+    this.data.whatsappLinks = (this.data.whatsappLinks ?? []).map((link) => (link.id === id ? { ...link, ...patch } : link))
+  }
+
+  async listWhatsAppTags() {
+    return [...(this.data.whatsappTags ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  async importWhatsAppTags(lists: Omit<WhatsAppTag, 'id'>[]) {
+    if (this.data.whatsappTags) return
+    this.data.whatsappTags = lists.map((list) => ({ id: uid('wat'), name: list.name, chatIds: [...new Set(list.chatIds)] }))
+  }
+
+  async createWhatsAppTag(name: string) {
+    const trimmed = name.trim()
+    if (!trimmed) throw new Error('A tag needs a name.')
+    const tags = (this.data.whatsappTags ??= [])
+    const existing = tags.find((tag) => tag.name.toLowerCase() === trimmed.toLowerCase())
+    if (existing) return existing
+    const tag: WhatsAppTag = { id: uid('wat'), name: trimmed, chatIds: [] }
+    tags.push(tag)
+    return tag
+  }
+
+  async setWhatsAppTagChat(tagId: string, chatId: string, tagged: boolean) {
+    this.data.whatsappTags = (this.data.whatsappTags ?? []).map((tag) => (tag.id !== tagId ? tag
+      : { ...tag, chatIds: tagged ? [...new Set([...tag.chatIds, chatId])] : tag.chatIds.filter((id) => id !== chatId) }))
+  }
+
+  async addCharge(employeeId: string, charge: Omit<Charge, 'id'>) {
+    const emp = this.data.employees.find((e) => e.id === employeeId)!
+    const full: Charge = { ...charge, id: uid('chg') }
+    emp.charges = [...emp.charges, full]
+    this.data.timeline.push({
+      id: uid('evt'), employeeId,
+      type: charge.kind === 'acting' ? 'promoted' : 'custom',
+      title: `${charge.kind === 'acting' ? 'Acting' : 'Additional'} charge: ${charge.title}`,
+      date: charge.startDate ?? isoToday(), note: charge.reason, source: 'system',
+    })
+    return full
+  }
+
+  async removeCharge(employeeId: string, chargeId: string) {
+    const emp = this.data.employees.find((e) => e.id === employeeId)!
+    emp.charges = emp.charges.filter((c) => c.id !== chargeId)
+  }
+
+  /** Everything `@goms/domain`'s `performSearch`/`performRelatedRecords` need,
+   *  sourced from this store. Rebuilt per call rather than cached, same
+   *  reasoning as `ownershipContext()` above. */
+  private searchData(): SearchData {
+    return {
+      nodes: this.data.nodes,
+      employees: this.data.employees.filter((e) => e.status === 'active'),
+      transfers: this.data.transfers,
+      timeline: this.data.timeline,
+      opportunities: this.data.opportunities.map((o) => {
+        const bid = this.data.bids.find((b) => b.opportunityId === o.id)
+        return { ...o, bidId: bid?.id ?? null, bidCode: bid?.bidCode ?? null, tenderLink: bid?.tenderLink ?? null }
+      }),
+      salesPersons: this.data.salesPersons,
+      postings: this.data.salesPostings,
+      today: isoToday(),
+    }
+  }
+
+  /** Natural-language-aware search. Recognises intent keywords ("connected",
+   *  "vacant", "transferred", "follow-ups due"), a state scope by name, and
+   *  relational phrases ("under X", "reporting to X"), then falls back to
+   *  fuzzy matching over names/codes/designations/locations. See
+   *  `@goms/domain`'s `performSearch` for the algorithm itself. */
+  async search(query: string, stateCode?: number): Promise<SearchResult[]> {
+    return performSearch(query, stateCode, this.searchData())
+  }
+
+  async relatedRecords(result: SearchResult): Promise<SearchResult[]> {
+    return performRelatedRecords(result, this.searchData())
+  }
+
+  async moveTargets(nodeId: string) {
+    const node = this.data.nodes.find((n) => n.id === nodeId)
+    if (!node) return []
+    const banned = new Set(this.subtreeIds(nodeId))
+    return this.data.nodes.filter((c) => {
+      if (banned.has(c.id)) return false
+      if (c.domain !== node.domain || c.stateCode !== node.stateCode) return false
+      if (c.status !== 'active') return false
+      return isValidChildType(c.typeKey, node.typeKey)
+    })
+  }
+
+  async importChildren(parentId: string, rows: ImportChildRow[]) {
+    const parent = this.data.nodes.find((n) => n.id === parentId)
+    if (!parent) return 0
+    const validTypes = childTypesOf(parent.typeKey)
+    const defaultType = NODE_TYPE_MAP[parent.typeKey]?.childKeys[0] ?? 'district'
+    let added = 0
+    for (const row of rows) {
+      const trimmed = row.name.trim()
+      if (!trimmed) continue
+      const matched = row.type
+        ? validTypes.find((t) => t.label.toLowerCase() === row.type!.trim().toLowerCase())
+        : undefined
+      await this.createNode({
+        domain: parent.domain, typeKey: matched?.key ?? defaultType, parentId,
+        stateCode: parent.stateCode, name: trimmed,
+      })
+      added += 1
+    }
+    return added
+  }
+
+  /** Bulk-creates employees under an existing org node — the employee
+   *  counterpart to `importChildren` above. Rows missing a name or
+   *  designation (both required on `Employee`) are skipped rather than
+   *  creating a half-filled record. */
+  async importEmployees(orgNodeId: string, rows: ImportEmployeeRow[]) {
+    const node = this.data.nodes.find((n) => n.id === orgNodeId)
+    if (!node) return 0
+    let added = 0
+    for (const row of rows) {
+      const name = row.name.trim()
+      const designation = row.designation.trim()
+      if (!name || !designation) continue
+      await this.createEmployee({
+        name, designation,
+        email: row.email?.trim() ?? '',
+        phone: row.phone?.trim() ?? '',
+        orgNodeId, managerId: null,
+        connected: row.connected,
+      })
+      added += 1
+    }
+    return added
+  }
+
+  /** Reorder `id` among its siblings so it sits immediately before `beforeId`
+   *  (or last, when `beforeId` is null). Used by drag-and-drop reordering. */
+  async reorderNode(id: string, beforeId: string | null) {
+    const node = this.data.nodes.find((n) => n.id === id)
+    if (!node) return
+    const siblings = this.data.nodes
+      .filter((n) => n.parentId === node.parentId && n.status === 'active')
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
+    const ordered = siblings.filter((n) => n.id !== id)
+    const idx = beforeId ? ordered.findIndex((n) => n.id === beforeId) : -1
+    if (idx >= 0) ordered.splice(idx, 0, node)
+    else ordered.push(node)
+    ordered.forEach((n, i) => { n.sortOrder = i })
+  }
+
+  async relationshipAnalytics(): Promise<RelationshipAnalytics> {
+    const today = isoToday()
+    const active = this.data.employees.filter((e) => e.status === 'active')
+    const people = active.filter((e) => !e.vacant)
+    const connected = people.filter((e) => e.connected)
+    const qualityDist: Record<RelationshipQuality, number> =
+      { excellent: 0, good: 0, neutral: 0, weak: 0, poor: 0 }
+    const statusDist: Record<RelationshipStatus, number> =
+      { engaged: 0, developing: 0, dormant: 0, new: 0 }
+    for (const e of connected) {
+      qualityDist[e.relationshipQuality] += 1
+      statusDist[e.relationshipStatus] += 1
+    }
+    const nameById = new Map(this.data.employees.map((e) => [e.id, e] as const))
+
+    const recentInteractions: InteractionSummary[] = this.data.timeline
+      .filter((t) => t.source === 'manual' && nameById.get(t.employeeId) && !nameById.get(t.employeeId)!.vacant)
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 8)
+      .map((t) => ({ employeeId: t.employeeId, name: nameById.get(t.employeeId)!.name, type: t.type, title: t.title, date: t.date }))
+
+    const upcomingMeetings: InteractionSummary[] = this.data.timeline
+      .filter((t) => (t.type === 'meeting' || t.type === 'inPerson') && t.date >= today
+        && nameById.get(t.employeeId) && !nameById.get(t.employeeId)!.vacant)
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(0, 8)
+      .map((t) => ({ employeeId: t.employeeId, name: nameById.get(t.employeeId)!.name, type: t.type, title: t.title, date: t.date }))
+
+    return {
+      total: people.length,
+      connected: connected.length,
+      notConnected: people.length - connected.length,
+      vacant: active.filter((e) => e.vacant).length,
+      transfers: this.data.transfers.length,
+      highPriority: people.filter((e) => e.importantContact).length,
+      qualityDist, statusDist, recentInteractions, upcomingMeetings,
+    }
+  }
+
+  // --- Customers ---------------------------------------------------------
+  async listCustomers(): Promise<Customer[]> {
+    return [...this.data.customers].sort((a, b) => a.name.localeCompare(b.name))
+  }
+  async getCustomer(id: string): Promise<Customer | null> {
+    return this.data.customers.find((c) => c.id === id) ?? null
+  }
+  async createCustomer(input: CreateCustomerInput): Promise<Customer> {
+    const customer: Customer = {
+      id: uid('cust'), name: input.name, organization: input.organization ?? '', address: input.address ?? '',
+      gst: input.gst ?? '', contactName: input.contactName ?? '', contactEmail: input.contactEmail ?? '',
+      contactPhone: input.contactPhone ?? '', notes: input.notes ?? '', createdAt: isoToday(), updatedAt: isoToday(),
+    }
+    this.data.customers.push(customer)
+    return customer
+  }
+  async updateCustomer(id: string, patch: Partial<Customer>): Promise<Customer> {
+    const customer = this.data.customers.find((c) => c.id === id)!
+    Object.assign(customer, patch, { updatedAt: isoToday() })
+    return customer
+  }
+  async deleteCustomer(id: string): Promise<void> {
+    this.data.customers = this.data.customers.filter((c) => c.id !== id)
+  }
+}
+
+/** Every `Repository` method that changes stored data. The proxy below saves a
+ *  snapshot after each of these resolves, so a new mutating method MUST be
+ *  listed here or its effects won't survive a reload. */
+const MUTATOR_KEYS = [
+  'createCredentialPassphrase', 'updateCredentialPassphrase', 'deleteCredentialPassphrase',
+  'saveBidSynopsis',
+  'createMakerDocument', 'uploadMakerDocument', 'replaceMakerDocument', 'renameMakerDocument', 'duplicateMakerDocument', 'deleteMakerDocument',
+  'shareMakerDocument', 'unshareMakerDocument', 'openMakerDesktopSession', 'connectMakerDrive', 'disconnectMakerDrive',
+  'createTenderWebsite', 'updateTenderWebsite', 'deleteTenderWebsite', 'setTenderWebsiteEditingLock',
+  'createCompetitor', 'updateCompetitor', 'deleteCompetitor',
+  'createInsightVisual', 'updateInsightVisual', 'deleteInsightVisual', 'createInsightReport', 'updateInsightReport', 'deleteInsightReport',
+  'createAmnexDepartment', 'renameAmnexDepartment', 'reorderAmnexDepartments', 'deleteAmnexDepartment',
+  'syncRbacNodes', 'setRbacConfig', 'createRbacRole', 'updateRbacRole', 'deleteRbacRole', 'createRbacTemplate', 'updateRbacTemplate',
+  'duplicateRbacTemplate', 'deleteRbacTemplate', 'applyRbacTemplate', 'unlinkRbacTemplate',
+  'createDeliveryTeamMember', 'updateDeliveryTeamMember', 'setDeliveryTeamMemberStatus', 'deleteDeliveryTeamMember',
+  'createOrgPerson', 'updateOrgPerson', 'deleteOrgPerson',
+  'createNode', 'updateNode', 'setNodeStatus', 'deleteNode', 'moveNode', 'duplicateNode',
+  'reorderNode', 'importChildren', 'importEmployees',
+  'createEmployee', 'updateEmployee', 'setManager', 'deleteEmployee', 'mergeEmployees',
+  'addTimelineEvent', 'updateTimelineEvent', 'setTimelineEventAttended', 'deleteTimelineEvent',
+  'transferEmployee', 'addCharge', 'removeCharge',
+  'createOpportunity', 'updateOpportunity', 'deleteOpportunity',
+  'createFollowUp', 'setFollowUpStatus', 'deleteFollowUp',
+  'addWhatsAppLink', 'removeWhatsAppLink', 'updateWhatsAppLink', 'importWhatsAppTags', 'createWhatsAppTag', 'setWhatsAppTagChat',
+  'assignOwner', 'endOwnership', 'transferBookOfBusiness',
+  'createSalesPerson', 'updateSalesPerson', 'setSalesPersonStatus', 'deleteSalesPerson', 'transferSalesPerson', 'updatePostingManager', 'updatePostingDates',
+  'createMaster', 'updateMaster', 'setMasterActive', 'deleteMaster', 'setEditionFeatures',
+  'createSku', 'updateSku', 'deleteSku', 'createBomItem', 'updateBomItem', 'deleteBomItem',
+  'createBoq', 'updateBoq', 'addBoqLineItem', 'updateBoqLineItem', 'removeBoqLineItem', 'reorderBoqLineItems', 'updateBoqStatus', 'reviseBoq', 'duplicateBoq', 'deleteBoq',
+  'createCustomer', 'updateCustomer', 'deleteCustomer',
+  'createBid', 'createBidForNewOpportunity', 'updateBid', 'archiveBid', 'markBidVerified', 'unarchiveBid', 'deleteBid', 'importBids',
+  'createBidMilestone', 'updateBidMilestone', 'deleteBidMilestone',
+  'createBidCorrigendum', 'updateBidCorrigendumRegister', 'reviewCorrigendumChange', 'addCorrigendumChanges', 'freezeValue', 'unfreezeValue',
+  'requestDocumentUploadUrl', 'confirmDocumentUpload', 'updateDocumentFiling', 'deleteDocument', 'createDocumentCitation', 'deleteDocumentCitation',
+  'createBidSavedView', 'updateBidSavedView', 'deleteBidSavedView',
+  'createBidCustomField', 'updateBidCustomField', 'reorderBidCustomFields', 'archiveBidCustomField',
+  'unarchiveBidCustomField', 'deleteBidCustomField', 'setBidCustomValue', 'setPeopleColumnConfig',
+  'createDeliveryTeamMember', 'updateDeliveryTeamMember', 'setDeliveryTeamMemberStatus', 'deleteDeliveryTeamMember',
+  'createOrgPerson', 'updateOrgPerson', 'deleteOrgPerson', 'setRoleOverride', 'removeRoleOverride',
+] as const
+
+/** Read-only methods. Listed only so the exhaustiveness check below can tell
+ *  "classified as a read" apart from "nobody classified it". */
+const READER_KEYS = [
+  'listCredentialPassphrases', 'getBidSynopsis', 'listTenderWebsites', 'listTenderDscEmployees', 'listCompetitors', 'listAmnexDepartments',
+  'listInsightVisuals', 'listInsightReports', 'listInsightCorrigenda',
+  'getRbacMyAccess', 'listRbacNodes', 'getRbacSubjects', 'getRbacConfig',
+  'listMakerDocuments', 'getMakerDownload', 'listMakerShareDirectory', 'listMakerShares', 'listMakerVersions', 'getMakerVersionDownload', 'getMakerDriveStatus',
+  'listDeliveryTeamMembers', 'listOrgPeople',
+  'listStates', 'getState', 'getNode', 'listChildren', 'listOrgRoots', 'listDepartments', 'listPostingNodes',
+  'breadcrumb', 'childCount', 'geoRoot', 'childCounts',
+  'listEmployeesUnder', 'listEmployeesDirect', 'listEmployeesByState', 'listAllEmployees',
+  'listEmployeeDepartments', 'getEmployee', 'directReports', 'reportingChain',
+  'listTimeline', 'listAllTimelineEvents', 'listTransfers', 'listMergeAudit',
+  'listOpportunities', 'listOpportunitiesByDepartment', 'getOpportunity', 'listOpportunityStageChanges',
+  'listFollowUps', 'listOpenFollowUps', 'listWhatsAppLinks', 'listWhatsAppTags',
+  'listSalesPersons', 'getSalesPerson', 'listSalesPostings', 'currentPostings',
+  'listOwnershipAssignments', 'listOwnershipFor', 'listOwnedBy', 'resolveOwner', 'resolveOwners',
+  'search', 'relatedRecords', 'moveTargets', 'relationshipAnalytics', 'getInsights',
+  'listMaster', 'getMaster', 'listEditionFeatures',
+  'listSkus', 'getSku', 'listBomItemsForSku', 'listAllBomItems', 'listBoqs', 'getBoq', 'listBoqLineItems',
+  'listAllBoqLineItems', 'listAuditLogs',
+  'listCustomers', 'getCustomer',
+  'listBidsForGrid', 'getBid', 'getBidForOpportunity', 'listBidActionQueue', 'listBidMilestones', 'listAllBidMilestones', 'listBidCorrigenda', 'listProtectedValues', 'previewBidImport',
+  'listDocuments', 'listDocumentCitations', 'getDocumentDownloadUrl', 'listBidSavedViews', 'listBidCustomFields', 'listBidCustomValues', 'listPeopleColumnConfigs',
+  'listDeliveryTeamMembers', 'listOrgPeople', 'getMyAccess', 'getAccessReadiness', 'listRoleOverrides',
+  'listUnmatchedOverrides', 'listOverrideHistory', 'getPermissionMatrix', 'getEffectivePermissions',
+] as const
+
+// Adding a method to `Repository` without classifying it above breaks the
+// build here, rather than silently not persisting at runtime: `Unclassified`
+// stops being `never`, so it no longer satisfies the constraint.
+type Unclassified = Exclude<keyof Repository, (typeof MUTATOR_KEYS | typeof READER_KEYS)[number]>
+const _allMethodsClassified: [Unclassified] extends [never] ? true : Unclassified = true
+void _allMethodsClassified
+
+const MUTATORS: ReadonlySet<keyof Repository> = new Set(MUTATOR_KEYS)
+
+const impl = new InMemoryRepository()
+
+/** Hydrates the store from the locally persisted snapshot, if there is one.
+ *  Call once, before the first render (see main.tsx) — every read goes straight
+ *  at `this.data`, so swapping it in afterwards would race the first queries.
+ *  `onExternalChange` runs after another tab's save has been swapped in, so the
+ *  caller can refresh every screen (main.tsx invalidates all queries). */
+export async function bootstrapRepository(onExternalChange: () => void): Promise<void> {
+  const saved = await loadSnapshot()
+  if (saved) impl.hydrate(saved)
+  // `impl`, not the proxy: adopting another tab's save must not schedule a save
+  // of its own, or every tab would re-broadcast it to every other tab forever.
+  syncWithOtherTabs((data) => {
+    impl.hydrate(data)
+    onExternalChange()
+  })
+}
+
+/** Discards the local snapshot and returns the store to pure seed data. */
+export async function resetLocalData(): Promise<void> {
+  await clearSnapshot()
+  impl.hydrate(buildSeed())
+}
+
+/** The full store, serializable as-is. Not part of `Repository`: read-only
+ *  introspection of the whole store, not a per-entity domain operation. */
+export function getFullSnapshot(): GormsData {
+  return impl.snapshot()
+}
+
+/** Replaces the whole store with a restored snapshot and persists it, the
+ *  same way any other mutation would — but bypassing the `Repository` proxy
+ *  since this isn't a per-entity domain operation either. Callers must
+ *  invalidate their own query cache afterward; this module has no
+ *  dependency on React Query. */
+export function restoreFromBackup(data: GormsData): void {
+  impl.hydrate(data)
+  scheduleSave(() => impl.snapshot())
+}
+
+/** The store, wrapped so that every mutation schedules a save. A proxy rather
+ *  than a `persist()` call at the end of ~18 methods: one place to get right,
+ *  and impossible to forget in a method body. Methods are bound to the concrete
+ *  instance so their private-field access still works. */
+export const repository: Repository = new Proxy(impl, {
+  get(target, prop, receiver) {
+    const value = Reflect.get(target, prop, receiver)
+    if (typeof value !== 'function') return value
+    const key = prop as keyof Repository
+    if (!MUTATORS.has(key)) return (value as (...a: unknown[]) => unknown).bind(target)
+    return (...args: unknown[]) => {
+      const out = (value as (...a: unknown[]) => unknown).apply(target, args)
+      // Save only once the mutation has actually resolved, so a rejected call
+      // (e.g. a validation throw) doesn't persist a half-applied state.
+      return Promise.resolve(out).then((result) => {
+        if (prop === 'importBids' && result && typeof result === 'object' && 'status' in result && result.status === 'rejected') return result
+        scheduleSave(() => target.snapshot())
+        return result
+      })
+    }
+  },
+}) as Repository
+
+// `impl` is a module-level singleton hydrated exactly once, at startup,
+// before `main.tsx`'s first render (see bootstrapRepository above). Without
+// this, Vite can re-execute this module in place when it (or something it
+// imports) changes during a dev session — re-running
+// `const impl = new InMemoryRepository()` with fresh, unhydrated seed data,
+// while the mounted React tree survives via Fast Refresh and keeps rendering
+// through it. The user sees their data "disappear," and the very next
+// mutation schedules a save of that empty seed state, overwriting the real
+// IndexedDB snapshot for good. Accepting the update and immediately
+// `invalidate()`-ing it is Vite's documented way to say "this module can
+// never be hot-swapped in place" — it forces the update to propagate into a
+// full page reload instead, which correctly re-runs `bootstrapRepository()`
+// before anything renders. This only affects local dev (`import.meta.hot` is
+// undefined in production builds and in the Vitest environment, so it's a
+// no-op there).
+if (import.meta.hot) {
+  import.meta.hot.accept(() => {
+    import.meta.hot!.invalidate('src/data/in-memory/repository.ts holds a hydrated singleton and cannot be hot-swapped safely')
+  })
+}

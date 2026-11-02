@@ -1,0 +1,91 @@
+import { useMemo } from 'react'
+import { Link } from 'react-router-dom'
+import { motion } from 'framer-motion'
+import { CountUp } from '@/components/ui/CountUp'
+import { IndiaMap } from '@/features/map/IndiaMap'
+import { useAllEmployees, useSalesPersons, useStates } from '@/lib/api'
+
+export function Landing() {
+  const { data: states = [] } = useStates()
+  const { data: employees = [] } = useAllEmployees()
+  const { data: salesPersons = [] } = useSalesPersons()
+  const totals = useMemo(() => {
+    const officers = employees.filter(e => !e.vacant)
+    const ias = officers.filter(e => /\bIAS\b/i.test(`${e.name} ${e.designation}`)).length
+    return {
+      iasOfficers: ias,
+      departments: states.reduce((s, x) => s + x.departments, 0),
+      deptOfficers: officers.length - ias,
+      salesMembers: salesPersons.filter(p => p.status === 'active').length,
+    }
+  }, [states, employees, salesPersons])
+
+  return (
+    <div className="grid h-full grid-cols-1 overflow-y-auto scrollbar-thin lg:grid-cols-[minmax(340px,440px)_1fr] lg:overflow-hidden">
+      {/* `lg:min-h-0`: without it, a grid item's default `min-height: auto`
+          floors it at its own content height, so on a shorter window this
+          column's content (heading + stats grid) forces the whole grid row
+          taller than the viewport — pushing the map section's bottom (and
+          its zoom controls) past the visible area, where the grid's own
+          `overflow-hidden` clips it off instead of showing a scrollbar.
+          `lg:overflow-y-auto` gives the excess somewhere to go: this column
+          scrolls internally rather than growing the row. */}
+      <section className="flex flex-col justify-center gap-8 border-b border-line px-8 py-12 lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r lg:px-12">
+        <div>
+          <motion.h1
+            className="font-display text-[clamp(2.2rem,4vw,3.4rem)] font-bold leading-[1.02] text-ink-900"
+            initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
+          >
+            Every office,<br />mapped to its ground.
+          </motion.h1>
+          <motion.p
+            className="mt-4 max-w-md text-[15px] leading-relaxed text-muted"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.12 }}
+          >
+            A living register of the Government of India — geographic divisions and
+            organizational structures held as one dynamic hierarchy. Select a state to
+            open its workspace.
+          </motion.p>
+        </div>
+
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
+          <Link
+            to="/state/0"
+            className="group flex items-center gap-3 rounded-card border border-line bg-white px-4 py-3 text-sm font-medium text-ink-900 transition-colors hover:border-ink-600 hover:bg-panel/60"
+          >
+            Central Ministries (Govt. of India)
+            <span aria-hidden className="ml-auto text-muted transition-transform group-hover:translate-x-0.5">→</span>
+          </Link>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }}
+        >
+          <span className="eyebrow">Mapping Statistics</span>
+          <div className="mt-2 grid grid-cols-2 gap-3">
+            <StatCard label="IAS Officers" value={totals.iasOfficers} accent="teal" />
+            <StatCard label="Departments" value={totals.departments} accent="ink" />
+            <StatCard label="Dept Officers" value={totals.deptOfficers} accent="ink" />
+            <StatCard label="Sales Members" value={totals.salesMembers} accent="indigo" />
+          </div>
+        </motion.div>
+      </section>
+
+      <section className="relative min-h-[420px]">
+        <div className="absolute inset-0">
+          <IndiaMap />
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function StatCard({ label, value, accent }: { label: string; value: number; accent: 'teal' | 'ink' | 'indigo' }) {
+  const ring = { teal: 'text-teal-600', ink: 'text-ink-900', indigo: 'text-indigo-600' }[accent]
+  return (
+    <div className="rounded-card border border-line bg-white px-4 py-3">
+      <div className={`font-mono text-2xl font-semibold tabular-nums ${ring}`}><CountUp value={value} /></div>
+      <div className="mt-0.5 text-[11px] uppercase tracking-wide text-muted">{label}</div>
+    </div>
+  )
+}

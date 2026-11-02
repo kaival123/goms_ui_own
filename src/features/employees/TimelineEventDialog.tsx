@@ -1,0 +1,319 @@
+import { NO_PERMISSION_TITLE, useAllowed, usePermissions } from '@/lib/permissions'
+import { useEffect, useMemo, useState } from 'react'
+import { Dialog } from '@/components/ui/Dialog'
+import { Button } from '@/components/ui/Button'
+import { Field, Input, Select } from '@/components/ui/Field'
+import { RepeatableMeetingField } from './RepeatableMeetingField'
+import { FriendlyDateInput } from '@/components/ui/FriendlyDateInput'
+import { MultiSelectDropdown } from '@/components/ui/MultiSelectDropdown'
+import { DraftNotice } from '@/components/ui/DraftNotice'
+import { useToast } from '@/components/ui/Toast'
+import { useAllEmployees, useEmployeeMutations, useSalesPersons } from '@/lib/api'
+import { isoToday } from '@/data/repository'
+import { useMeetingDraft } from './useMeetingDraft'
+import { auth } from '@/lib/firebaseAuth'
+import { MANUAL_EVENT_TYPES, TIMELINE_META } from '@/lib/timeline-meta'
+import { EmployeePicker } from './EmployeePicker'
+import { MeetingPersonDialog } from './MeetingPersonDialog'
+import type { AttendeeRef, Employee, TimelineEvent, TimelineEventType } from '@/lib/types'
+
+/**
+ * `employeeId: null` opens the dialog with an employee-search/pick step
+ * first (used by the global "+ Add entry" entry point, which has no
+ * pre-selected person); once someone is picked, it proceeds into the exact
+ * same logging flow as the profile's "+ Add entry" button, which always
+ * passes a real `employeeId` and therefore never sees this step at all.
+ *
+ * `initialType`/`typeFilter` narrow/preselect the Type field for a given
+ * call site — e.g. the employee profile's "+ Add meeting" passes
+ * `MEETING_LOG_TYPES` (contact-with-a-person categories only, defaulting to
+ * 'inPerson'), while the global FAB's "Add Activity" passes `ALL_EVENT_TYPES`
+ * (every type including Meeting, defaulting to 'meeting') and lets the user
+ * pick. Both props are optional so a future context-specific caller can
+ * still force a single preselected type without offering the others.
+ */
+function formFromEvent(e: TimelineEvent) {
+  return {
+    type: e.type, title: e.title, customLabel: e.customLabel ?? '', date: e.date, time: e.time ?? '',
+    note: e.note, attendees: e.attendees ?? ([] as AttendeeRef[]),
+    agenda: e.agenda ?? '', outcome: e.outcome ?? '', nextSteps: e.nextSteps ?? '',
+  }
+}
+
+export function TimelineEventDialog({ open, employeeId, initialType, typeFilter, existingEvent, onClose }: {
+  open: boolean
+  employeeId: string | null
+  /** Type the Type field starts on. Defaults to the first entry of `typeFilter`
+   *  (or of every manual type, if `typeFilter` is also omitted). */
+  initialType?: TimelineEventType
+  /** Narrows the Type dropdown to this subset. Defaults to every manual type. */
+  typeFilter?: TimelineEventType[]
+  /** Task 8.4 (Item 14): when set, the dialog opens in edit mode — every
+   *  field pre-fills from this record, and submitting calls
+   *  `updateTimelineEvent` (same id, no new row) instead of `addTimelineEvent`. */
+  existingEvent?: TimelineEvent
+  onClose: () => void
+}) {
+  const toast = useToast()
+  const { addTimelineEvent, updateTimelineEvent } = useEmployeeMutations()
+  const allowed = useAllowed('am.meetings', existingEvent ? 'update' : 'create')
+  const canCreatePerson = useAllowed('am.contacts', 'create')
+  const { data: allEmployees = [] } = useAllEmployees()
+  const { data: salesPersons = [] } = useSalesPersons()
+  const [pickedEmployeeId, setPickedEmployeeId] = useState<string | null>(null)
+  const [creatingPerson, setCreatingPerson] = useState(false)
+  const [createdPerson, setCreatedPerson] = useState<Employee | null>(null)
+  const activeEmployeeId = employeeId ?? pickedEmployeeId
+  const showPicker = !activeEmployeeId
+  const pickedEmployee = pickedEmployeeId ? allEmployees.find((e) => e.id === pickedEmployeeId) ?? (createdPerson?.id === pickedEmployeeId ? createdPerson : undefined) : undefined
+  const typeOptionsBase = typeFilter && typeFilter.length > 0 ? typeFilter : MANUAL_EVENT_TYPES
+  // An existing entry's own type might fall outside the caller's typeFilter
+  // (e.g. a 'meeting'-type entry created via the global FAB, edited from a
+  // call site that passes MEETING_LOG_TYPES) — keep it selectable rather than
+  // silently offering to change it as a side effect of opening Edit.
+  const typeOptions = existingEvent && !typeOptionsBase.includes(existingEvent.type)
+    ? [existingEvent.type, ...typeOptionsBase]
+    : typeOptionsBase
+  const defaultType = initialType ?? typeOptions[0]
+  const EMPTY_FORM = {
+    type: defaultType, title: '', customLabel: '', date: isoToday(), time: '', note: '', attendees: [] as AttendeeRef[],
+    agenda: '', outcome: '', nextSteps: '',
+  }
+  const [form, setForm] = useState(EMPTY_FORM)
+
+  // Scope drafts to the signed-in account and entry point. Global creation
+  // includes the selected person; editing has a separate key per meeting.
+  const draftOwner = auth?.currentUser?.uid ?? 'local'
+  const draftKey = draftOwner ? `${draftOwner}:${existingEvent ? `edit:${existingEvent.id}` : `new:${employeeId ?? 'global'}`}` : null
+  const draft = useMeetingDraft(draftKey, { personId: activeEmployeeId, form }, open)
+  function discardDraft() {
+    draft.clear()
+    setForm(existingEvent ? formFromEvent(existingEvent) : EMPTY_FORM)
+    if (!employeeId) setPickedEmployeeId(null)
+    // Establish the fresh baseline so subsequent typing starts a new draft.
+    draft.take({ personId: employeeId, form: existingEvent ? formFromEvent(existingEvent) : EMPTY_FORM })
+  }
+  function closeWithDraft() { draft.flush(); onClose() }
+
+  useEffect(() => {
+    if (open) {
+      const seeded = existingEvent ? formFromEvent(existingEvent) : EMPTY_FORM
+      const saved = draft.take({ personId: employeeId, form: seeded })
+      let legacy = null
+      if (!saved && employeeId && !existingEvent) {
+        try {
+          const raw = sessionStorage.getItem(`gorms:draft:timeline:${employeeId}`)
+          if (raw) { const old = JSON.parse(raw); if (Date.now() - old.savedAt < 12 * 60 * 60 * 1000) legacy = old.form; sessionStorage.removeItem(`gorms:draft:timeline:${employeeId}`) }
+        } catch { /* Older tab drafts are optional. */ }
+      }
+      setForm(saved?.form ?? legacy ?? seeded)
+      setPickedEmployeeId(employeeId ? null : saved?.personId ?? null)
+      setCreatingPerson(false)
+      setCreatedPerson(null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, existingEvent, draftKey])
+
+  // MultiSelectDropdown operates over a plain string[] of names. Legacy
+  // plain-string attendees (e.g. restored from a draft saved before this
+  // picker existed) carry no salesPersonId, so they can't be represented as
+  // a picker selection — they're split out and shown read-only instead,
+  // rather than silently dropped. Only the resolvable (ID-carrying) subset
+  // is what the picker shows/edits.
+  const resolvedAttendees = useMemo(
+    () => form.attendees.filter((a): a is { salesPersonId: string; name: string } => typeof a !== 'string'),
+    [form.attendees],
+  )
+  const legacyAttendeeNames = useMemo(
+    () => form.attendees.filter((a): a is string => typeof a === 'string'),
+    [form.attendees],
+  )
+
+  // Task 9.4: the picker's chips and dropdown rows each show a small avatar
+  // next to the name. Resolved by matching the roster (same `salesPersons`
+  // list the options themselves come from) rather than guessing — no
+  // SalesPerson carries a photo today, so this always renders initials, but
+  // it's still a real per-person lookup (by name, since MultiSelectDropdown
+  // operates over plain option strings) rather than a hardcoded fallback.
+  function avatarForAttendee(name: string): { name: string; photoUrl?: string | null } {
+    const person = salesPersons.find((p) => p.name === name)
+    return { name: person?.name ?? name, photoUrl: person?.photoUrl }
+  }
+
+  function handleAttendeesChange(names: string[]) {
+    setForm((f) => {
+      const resolved: AttendeeRef[] = names.map((name) => {
+        const existing = f.attendees.find((a) => typeof a !== 'string' && a.name === name)
+        if (existing) return existing
+        const person = salesPersons.find((p) => p.name === name)
+        return person ? { salesPersonId: person.id, name: person.name } : name
+      })
+      const legacy = f.attendees.filter((a) => typeof a === 'string')
+      return { ...f, attendees: [...legacy, ...resolved] }
+    })
+  }
+
+  async function submit() {
+    if (!activeEmployeeId || !form.title.trim()) return
+    const shared = {
+      title: form.title.trim(),
+      date: form.date, time: form.time, note: form.note, attendees: form.attendees,
+    }
+    if (existingEvent) {
+      // Meeting type (and its custom label) is immutable once an event
+      // exists — the Select above is disabled to match, and `type`/
+      // `customLabel` are deliberately left out of the patch here rather
+      // than relying on the Postgres router's zod strip: the in-memory
+      // backend's updateTimelineEvent does a raw Object.assign(evt, patch)
+      // with no such filter, so including them would silently apply a type
+      // change on that backend while Postgres silently dropped it — same
+      // user action, different result depending on which backend is active.
+      //
+      // A blanked-out field must still overwrite whatever the record had —
+      // `null` (not `undefined`) is what actually clears it via the
+      // dynamic-SET patch, unlike the `add` branch below where an untouched
+      // optional field is simply omitted from the insert.
+      await updateTimelineEvent.mutateAsync({
+        id: existingEvent.id,
+        patch: {
+          ...shared,
+          agenda: form.agenda.trim() || null, outcome: form.outcome.trim() || null, nextSteps: form.nextSteps.trim() || null,
+        },
+      })
+      toast('Meeting updated')
+    } else {
+      await addTimelineEvent.mutateAsync({
+        employeeId: activeEmployeeId, ...shared,
+        type: form.type,
+        customLabel: form.type === 'custom' ? form.customLabel.trim() : undefined,
+        agenda: form.agenda.trim() || undefined, outcome: form.outcome.trim() || undefined, nextSteps: form.nextSteps.trim() || undefined,
+      })
+      toast('Meeting added')
+    }
+    draft.clear()
+    try { if (activeEmployeeId) sessionStorage.removeItem(`gorms:draft:timeline:${activeEmployeeId}`) } catch { /* Saved meeting already exists. */ }
+    onClose()
+  }
+
+  if (showPicker) {
+    if (open && creatingPerson) return <MeetingPersonDialog onBack={() => setCreatingPerson(false)} onCreated={person => { setCreatedPerson(person); setPickedEmployeeId(person.id); setCreatingPerson(false) }} />
+    return (
+      <Dialog
+        open={open}
+        onClose={closeWithDraft}
+        title="Add New Meeting"
+        size="lg"
+        description="Choose who this is for"
+        footer={<Button onClick={closeWithDraft}>Cancel</Button>}
+      >
+        <Field label="Person" hint="Search by name or designation">
+          <EmployeePicker
+            candidates={allEmployees}
+            value=""
+            onChange={(id) => { if (id) setPickedEmployeeId(id) }}
+            placeholder="Search a person…"
+          />
+        </Field>
+        {canCreatePerson && <Button className="mt-4" onClick={() => setCreatingPerson(true)}>Create new person</Button>}
+      </Dialog>
+    )
+  }
+
+  const pending = existingEvent ? updateTimelineEvent.isPending : addTimelineEvent.isPending
+  return (
+    <Dialog
+      open={open}
+      onClose={closeWithDraft}
+      title={existingEvent ? 'Edit Meeting' : 'Add New Meeting'}
+      size="xl"
+      description={!employeeId && pickedEmployee ? `For ${pickedEmployee.name}` : undefined}
+      footer={
+        <>
+          <Button onClick={closeWithDraft} disabled={pending}>Cancel</Button>
+          <Button variant="primary" onClick={submit} disabled={(!form.title.trim() || pending) || !allowed} title={allowed ? undefined : NO_PERMISSION_TITLE}>
+            {existingEvent ? (pending ? 'Saving…' : 'Save changes') : (pending ? 'Adding…' : 'Add Meeting')}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        {draft.restored && <DraftNotice onDiscard={discardDraft} />}
+        <p role="status" className="text-xs text-muted">{!draftKey ? 'Sign in to save a draft on this device.' : draft.error ? 'Draft could not be saved on this device. Keep this form open.' : 'Draft saved on this device as you type. You can close and continue later.'}</p>
+        {!employeeId && pickedEmployee && (
+          <button
+            type="button"
+            onClick={() => setPickedEmployeeId(null)}
+            className="text-[12px] font-medium text-teal-600 hover:underline"
+          >
+            Change person
+          </button>
+        )}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <Field
+            label="Meeting type"
+            hint={existingEvent ? "Can't be changed after creation" : undefined}
+          >
+            <Select
+              value={form.type}
+              onChange={(e) => setForm((f) => ({ ...f, type: e.target.value as TimelineEventType }))}
+              disabled={!!existingEvent}
+            >
+              {typeOptions.map((t) => (
+                <option key={t} value={t}>{TIMELINE_META[t].label}</option>
+              ))}
+            </Select>
+          </Field>
+          {form.type === 'custom' && (
+            <Field label="Custom type label" hint={existingEvent ? "Can't be changed after creation" : "Shown on the entry instead of “Custom”"}>
+              <Input
+                value={form.customLabel}
+                onChange={(e) => setForm((f) => ({ ...f, customLabel: e.target.value }))}
+                placeholder="e.g. Site visit"
+                disabled={!!existingEvent}
+              />
+            </Field>
+          )}
+          <Field label="Date">
+            <FriendlyDateInput value={form.time ? `${form.date}T${form.time}` : form.date}
+              onChange={next => setForm(current => ({ ...current, date: next.slice(0, 10), time: next.includes('T') ? next.slice(11, 16) : '' }))} />
+          </Field>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+        <Field label="Title" required>
+          <Input
+            value={form.title}
+            onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+            placeholder="e.g. Budget review meeting"
+            autoFocus
+          />
+        </Field>
+        <Field label="Attending AMNEX Sales Team Members" hint="Select any internal attendees">
+          <MultiSelectDropdown
+            value={resolvedAttendees.map((a) => a.name)}
+            onChange={handleAttendeesChange}
+            groups={[{ label: null, options: salesPersons.map((p) => p.name) }]}
+            storageKey="timeline-attendees"
+            placeholder="Search and select attendees…"
+            searchable
+            searchPlaceholder="Search sales team…"
+            allowCustomAdd={false}
+            avatarFor={avatarForAttendee}
+          />
+          {legacyAttendeeNames.length > 0 && (
+            <p className="mt-1.5 text-[12px] text-muted">
+              Also: {legacyAttendeeNames.join(', ')}{' '}
+              <span className="italic">(no linked sales team record; not editable here)</span>
+            </p>
+          )}
+        </Field>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <RepeatableMeetingField label="Note" value={form.note} disabled={pending} onChange={note => setForm(f => ({ ...f, note }))} />
+          <RepeatableMeetingField label="Agenda" value={form.agenda} disabled={pending} onChange={agenda => setForm(f => ({ ...f, agenda }))} />
+          <RepeatableMeetingField label="Outcome" value={form.outcome} disabled={pending} onChange={outcome => setForm(f => ({ ...f, outcome }))} />
+          <RepeatableMeetingField label="Next steps" value={form.nextSteps} disabled={pending} onChange={nextSteps => setForm(f => ({ ...f, nextSteps }))} />
+        </div>
+      </div>
+    </Dialog>
+  )
+}

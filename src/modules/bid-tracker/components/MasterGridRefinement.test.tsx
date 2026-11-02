@@ -1,0 +1,761 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter } from 'react-router-dom'
+import { repository, resetLocalData } from '@/data/repository'
+import { MasterGrid, type MasterGridProps } from './MasterGrid'
+
+// The Master Grid refinement: toolbar order, Lock / Unlock, per-column freeze,
+// the structured / entity-backed column types, and grouped AND / OR filters —
+// against the real in-memory repository and real hooks.
+async function makeBid(name: string) {
+  const opp = await repository.createOpportunity({ departmentId: 'dept-1', opportunityName: name, submissionDate: '2099-01-15' })
+  return repository.createBid(opp.id)
+}
+
+function renderGrid(props: MasterGridProps = {}) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter><MasterGrid {...props} /></MemoryRouter>
+    </QueryClientProvider>,
+  )
+}
+
+function stubLayout() {
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(800)
+  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(1200)
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 800, width: 1200, height: 800, toJSON: () => ({}),
+  })
+}
+
+const rowNames = () => screen.queryAllByTestId('bid-row').map((r) => within(r).queryByText(/^(Alpha|Beta|Gamma|Delta)$/)?.textContent)
+const leafHeaders = () => Array.from(document.querySelectorAll('thead tr:nth-child(2) th')).map((th) => th.textContent?.replace('Frozen', ''))
+/** Text of an element without its aria-hidden parts (e.g. avatar initials). */
+const visibleName = (el: HTMLElement) => {
+  const clone = el.cloneNode(true) as HTMLElement
+  clone.querySelectorAll('[aria-hidden="true"]').forEach((n) => n.remove())
+  return clone.textContent?.trim()
+}
+const lockSwitch = () => screen.getByRole('button', { name: /Master grid editing (locked|unlocked)/ })
+const unlock = async () => userEvent.click(await screen.findByRole('button', { name: /editing locked/ }))
+const leafTh = (name: string) => document.querySelector(`thead th[data-col-id="${name}"]`) as HTMLElement
+const bidWithColumn = async (type: Parameters<typeof repository.createBidCustomField>[0]['dataType'], name: string, options?: string[]) => {
+  const bid = await makeBid('Alpha')
+  const field = await repository.createBidCustomField({ name, dataType: type, ...(options ? { options } : {}) })
+  return { bid, field }
+}
+
+describe('Master Grid refinement', () => {
+  beforeEach(async () => {
+    stubLayout()
+    localStorage.clear()
+    await resetLocalData()
+  })
+
+  describe('toolbar', () => {
+    it('double-clicks column edges to fit all row values and keeps frozen offsets aligned', async () => {
+      const title = 'A detailed project description '.repeat(3)
+      await makeBid(title)
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ font: '', measureText: (text: string) => ({ width: text.length * 8 }) } as any)
+      renderGrid()
+      await screen.findByText(title.trim())
+      const width = (id: string) => Number.parseFloat((document.querySelector('col[data-col-id="' + id + '"]') as HTMLElement).style.width)
+      const beforeName = width('opportunityName'), beforeCity = width('city')
+      await userEvent.click(screen.getByRole('button', { name: 'Opportunity / Mission column menu' }))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Freeze column' }))
+      await waitFor(() => expect(screen.queryByRole('menuitem', { name: 'Freeze column' })).not.toBeInTheDocument())
+      await userEvent.click(screen.getByRole('button', { name: 'City column menu' }))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Freeze column' }))
+      expect(screen.queryByRole('button', { name: 'Auto-fit columns' })).not.toBeInTheDocument()
+      await userEvent.dblClick(screen.getByRole('separator', { name: 'Resize Opportunity / Mission column' }))
+      await userEvent.dblClick(screen.getByRole('separator', { name: 'Resize City column' }))
+      expect(width('opportunityName')).toBeGreaterThan(beforeName)
+      expect(width('city')).toBeLessThan(beforeCity)
+      expect(leafTh('city').style.left).toBe((40 + width('opportunityName')) + 'px')
+    })
+
+    it('drags column edges wider and narrower without sorting or reordering', async () => {
+      await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      const edge = screen.getByRole('separator', { name: 'Resize Bid ID column' })
+      const col = document.querySelector('col[data-col-id="bidCode"]') as HTMLElement
+      const start = Number.parseFloat(col.style.width)
+      fireEvent.mouseDown(edge, { clientX: 200, button: 0 })
+      fireEvent.mouseMove(document, { clientX: 260 })
+      fireEvent.mouseUp(document, { clientX: 260 })
+      expect(Number.parseFloat(col.style.width)).toBe(start + 60)
+      fireEvent.mouseDown(edge, { clientX: 260, button: 0 })
+      fireEvent.mouseMove(document, { clientX: 220 })
+      fireEvent.mouseUp(document, { clientX: 220 })
+      expect(Number.parseFloat(col.style.width)).toBe(start + 20)
+      fireEvent.keyDown(edge, { key: 'ArrowLeft' })
+      expect(Number.parseFloat(col.style.width)).toBe(start + 4)
+      expect(leafTh('bidCode')).toHaveAttribute('aria-sort', 'none')
+    })
+
+    it('wraps full bid identifiers, multiline text, and every selected value', async () => {
+      const bid = await makeBid('Alpha')
+      const note = await repository.createBidCustomField({ name: 'Long note', dataType: 'text' })
+      const tags = await repository.createBidCustomField({ name: 'Tags', dataType: 'multiselect', options: ['First', 'Second', 'Third'] })
+      await repository.setBidCustomValue(bid.id, note.id, 'First line\nSecond line with a long explanation')
+      await repository.setBidCustomValue(bid.id, tags.id, JSON.stringify(['First', 'Second', 'Third']))
+      renderGrid()
+      await screen.findByText('Alpha')
+      const bidLink = screen.getByRole('button', { name: /^Open BID/ })
+      expect(bidLink.className).not.toContain('truncate')
+      expect(bidLink.closest('td')).toHaveClass('whitespace-pre-wrap')
+      const row = screen.getByTestId('bid-row')
+      expect(within(row).getByText('Third')).toBeInTheDocument()
+      expect(within(row).queryByText('+1')).not.toBeInTheDocument()
+      await unlock()
+      const cell = screen.getByRole('button', { name: 'Edit Long note' })
+      expect(cell).toHaveClass('min-h-[35px]', 'whitespace-pre-wrap')
+      await userEvent.click(cell)
+      expect(screen.getByRole('textbox', { name: 'Long note' }).tagName).toBe('TEXTAREA')
+    })
+
+    it('reads Search / Filters → Lock → Columns (with Add column inside) → Create Bid, with Columns only once', async () => {
+      await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      const toolbar = screen.getByRole('searchbox', { name: 'Search bids' }).closest('div[class*="border-b"]')!
+      const labels = Array.from(toolbar.querySelectorAll('button')).map((b) => b.getAttribute('aria-label') ?? b.textContent?.trim())
+      const at = (re: RegExp) => labels.findIndex((l) => re.test(l ?? ''))
+      expect(at(/^Filters/)).toBeGreaterThanOrEqual(0)
+      expect(at(/Add column/)).toBe(-1) // moved into the Manage columns dropdown
+      expect(at(/Master grid editing/)).toBeGreaterThan(at(/^Filters/))
+      expect(at(/^Manage columns/)).toBeGreaterThan(at(/Master grid editing/))
+      expect(at(/Create Bid/)).toBeGreaterThan(at(/^Manage columns/))
+      expect(labels.filter((l) => /^Manage columns/.test(l ?? ''))).toHaveLength(1)
+      // Columns sits in the right-hand cluster with Create Bid.
+      const cluster = screen.getByRole('button', { name: /Create Bid/ }).parentElement!
+      expect(within(cluster).getByRole('button', { name: /^Manage columns/ })).toBeInTheDocument()
+      expect(within(cluster).getByRole('button', { name: /Master grid editing/ })).toBeInTheDocument()
+    })
+
+    it('no longer shows the Editable / Read-only legend, the cell hint or the bid count', async () => {
+      await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      expect(screen.queryByText(/Click a cell to edit/)).not.toBeInTheDocument()
+      expect(screen.queryByText('Read-only')).not.toBeInTheDocument()
+      expect(screen.queryByText('Editable')).not.toBeInTheDocument()
+      expect(screen.queryByText(/\d+ bids?$/)).not.toBeInTheDocument()
+    })
+  })
+
+  describe('lock / unlock', () => {
+    it('starts locked: no cell becomes an editor, in any column', async () => {
+      await makeBid('Alpha')
+      await repository.createBidCustomField({ name: 'Note', dataType: 'text' })
+      renderGrid()
+      await screen.findByText('Alpha')
+      expect(lockSwitch()).toHaveAttribute('aria-pressed', 'false')
+      expect(lockSwitch()).toHaveAttribute('title', lockSwitch().getAttribute('aria-label'))
+      expect(screen.queryByRole('button', { name: /^Edit / })).not.toBeInTheDocument()
+      expect(document.querySelector('[data-editable-cell]')).toBeNull()
+      expect(screen.queryByTitle('Editable column')).not.toBeInTheDocument()
+      expect(screen.queryAllByRole('button', { name: /^Unlock .+ column$/ })).toHaveLength(0)
+      expect(screen.queryByRole('button', { name: /^Lock .+ column$/ })).not.toBeInTheDocument()
+    })
+
+    it('no cell edits while locked; the Bid ID opens the bid', async () => {
+      await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      const row = screen.getByTestId('bid-row')
+      await userEvent.click(within(row).getAllByRole('cell')[4])
+      expect(document.querySelector('input[type=text]')).toBeNull()
+      // The Bid ID is the details link.
+      expect(within(row).getByRole('button', { name: /^Open BID-/ })).toBeInTheDocument()
+    })
+
+    it('unlocking makes editable cells editable and marks them; read-only ones stay read-only', async () => {
+      await makeBid('Alpha')
+      await repository.createBidCustomField({ name: 'Note', dataType: 'text' })
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      expect(lockSwitch()).toHaveAttribute('aria-pressed', 'true')
+      expect(lockSwitch()).toHaveAttribute('title', lockSwitch().getAttribute('aria-label'))
+      const editable = [
+        'Opportunity / Mission', 'Opportunity Type', 'Tender ID', 'Reference/Bid No.', 'Name of Assignment', 'Tender Link', 'Requirement', 'Products', 'Department / Client', 'State', 'City', 'Vertical',
+        'Geo-sales', 'BU-sales', 'Pre-sales', 'Legal', 'Bid', 'Bid Owner', 'Sales Lead / Solution Lead',
+        'Bid Stage', 'Next Action', 'Action Owner', 'Action Due', 'Decision', 'Data Confidence', 'Note',
+      ]
+      for (const header of editable) {
+        expect(screen.getByRole('button', { name: `Edit ${header}` })).toBeInTheDocument()
+      }
+      expect(screen.getAllByTitle('Editable column').length).toBe(editable.length)
+      for (const header of ['Bid ID', 'Next Milestone', 'Days Remaining', 'Submission Deadline', 'Tender Files', 'Latest Corrigendum', 'Last Updated', 'Updated By', 'Attention']) {
+        expect(screen.queryByRole('button', { name: `Edit ${header}` })).not.toBeInTheDocument()
+      }
+      // Read-only cells become a focusable lock box once unlocked.
+      expect(document.querySelectorAll('[data-readonly-cell]').length).toBeGreaterThan(0)
+    })
+
+    it('uses only the top lock and ignores legacy per-column lock settings', async () => {
+      await makeBid('Alpha')
+      localStorage.setItem('goms:bidGrid:columnLocks:bidTracker', JSON.stringify({ locked: ['city'], unlocked: [] }))
+      const view = renderGrid()
+      await screen.findByText('Alpha')
+      expect(screen.queryAllByRole('button', { name: /lock .+ column/i })).toHaveLength(0)
+      await unlock()
+      expect(screen.getByRole('button', { name: 'Edit Tender ID' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Edit City' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Edit Days Remaining' })).not.toBeInTheDocument()
+      await userEvent.click(lockSwitch())
+      expect(screen.queryByRole('button', { name: 'Edit City' })).not.toBeInTheDocument()
+      view.unmount()
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      expect(screen.getByRole('button', { name: 'Edit City' })).toBeInTheDocument()
+      expect(screen.queryAllByRole('img', { name: 'Always locked' })).toHaveLength(0)
+    })
+
+    it('read-only cells say why when the grid is unlocked', async () => {
+      await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      const cell = within(screen.getByTestId('bid-row')).getAllByRole('cell').find((c) => /System-generated.*System field/.test(c.getAttribute('title') ?? ''))
+      expect(cell).toBeTruthy()
+    })
+
+    it('edits Vertical and the name inline, and logs them against the bid', async () => {
+      const bid = await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      // Vertical picks from the Verticals master; Enter takes the top match.
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Vertical' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Search Vertical' }), 'Traffic{Enter}')
+      await waitFor(async () => expect((await repository.getOpportunity(bid.opportunityId))?.vertical).toBe('Traffic'))
+      // Clearing Vertical stores an empty string (the API's Vertical is not nullable).
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Vertical' }))
+      await userEvent.click(await screen.findByRole('option', { name: '— Clear' }))
+      await waitFor(async () => expect((await repository.getOpportunity(bid.opportunityId))?.vertical).toBe(''))
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Opportunity / Mission' }))
+      await userEvent.clear(screen.getByRole('textbox', { name: 'Opportunity / Mission' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Opportunity / Mission' }), 'Alpha Prime{Enter}')
+      await waitFor(async () => expect((await repository.getOpportunity(bid.opportunityId))?.opportunityName).toBe('Alpha Prime'))
+      const log = await repository.listAuditLogs({ entityType: 'bid', entityId: bid.id })
+      expect(log.map((l) => l.field).sort()).toEqual(['opportunityName', 'vertical', 'vertical'])
+    })
+
+    it('the opportunity name cannot be saved empty', async () => {
+      const bid = await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Opportunity / Mission' }))
+      await userEvent.clear(screen.getByRole('textbox', { name: 'Opportunity / Mission' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Opportunity / Mission' }), '{Enter}')
+      expect(await screen.findByRole('alert')).toHaveTextContent(/required/)
+      expect((await repository.getOpportunity(bid.opportunityId))?.opportunityName).toBe('Alpha')
+    })
+
+    it('locking again exits editing, and a valid in-progress edit is saved, not lost', async () => {
+      const { bid } = await bidWithColumn('text', 'Note')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Note' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Note' }), 'half typed')
+      await userEvent.click(lockSwitch()) // the click blurs the editor, which saves
+      await waitFor(async () => expect((await repository.listBidCustomValues(bid.id)).note).toBe('half typed'))
+      expect(lockSwitch()).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.queryByRole('button', { name: 'Edit Note' })).not.toBeInTheDocument()
+      expect(screen.getByText('half typed')).toBeInTheDocument()
+    })
+
+    it('an edit that cannot be saved blocks locking until it is kept or explicitly discarded', async () => {
+      const { bid } = await bidWithColumn('email', 'Contact')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Contact' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Contact' }), 'not-an-email')
+      await userEvent.click(lockSwitch())
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog).toHaveTextContent('unsaved edit')
+      expect(lockSwitch()).toHaveAttribute('aria-pressed', 'true') // still unlocked behind the prompt
+
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      expect(screen.getByRole('textbox', { name: 'Contact' })).toHaveValue('not-an-email')
+      expect(lockSwitch()).toHaveAttribute('aria-pressed', 'true')
+
+      await userEvent.click(lockSwitch())
+      await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Discard edit and lock' }))
+      await waitFor(() => expect(lockSwitch()).toHaveAttribute('aria-pressed', 'false'))
+      expect(screen.queryByRole('textbox', { name: 'Contact' })).not.toBeInTheDocument()
+      expect((await repository.listBidCustomValues(bid.id)).contact).toBeUndefined()
+    })
+
+    it('Escape cancels an edit explicitly, after which locking needs no prompt', async () => {
+      await bidWithColumn('text', 'Note')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Note' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Note' }), 'draft{Escape}')
+      await userEvent.click(lockSwitch())
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(lockSwitch()).toHaveAttribute('aria-pressed', 'false')
+    })
+
+    it('a save that fails after the grid was locked is reported in the toolbar', async () => {
+      await bidWithColumn('text', 'Note')
+      let reject: (e: Error) => void = () => {}
+      vi.spyOn(repository, 'setBidCustomValue').mockImplementationOnce(() => new Promise((_, r) => { reject = r }))
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Note' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Note' }), 'oops{Enter}')
+      await userEvent.click(lockSwitch())
+      reject(new Error('Server said no'))
+      expect(await screen.findByRole('alert')).toHaveTextContent('Note on BID-')
+      expect(screen.getByRole('alert')).toHaveTextContent('Server said no')
+    })
+  })
+
+  describe('freeze / unfreeze', () => {
+    it('freezes nothing by default (only the selection checkbox column is pinned)', async () => {
+      await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      const sticky = Array.from(document.querySelectorAll('thead tr:nth-child(2) th')).filter((th) => th.className.includes('sticky'))
+      expect(sticky).toHaveLength(0)
+      expect(screen.queryByTitle('Frozen column')).not.toBeInTheDocument()
+      expect(screen.getByRole('checkbox', { name: 'Select all rows' })).toBeInTheDocument()
+    })
+
+    it('every data column has Freeze column in its header menu', async () => {
+      await bidWithColumn('text', 'Note')
+      renderGrid()
+      await screen.findByText('Alpha')
+      for (const header of ['Opportunity / Mission', 'Tender ID', 'Vertical', 'Note']) {
+        await userEvent.click(screen.getByRole('button', { name: `${header} column menu` }))
+        expect(screen.getByRole('menuitem', { name: 'Freeze column' })).toBeEnabled()
+        await userEvent.click(screen.getByRole('button', { name: `${header} column menu` })) // toggles it closed
+        await waitFor(() => expect(screen.queryByRole('menuitem', { name: 'Freeze column' })).not.toBeInTheDocument())
+      }
+    })
+
+    it('freezes and unfreezes a column in its position; frozen columns stack in order', async () => {
+      await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      const before = leafHeaders()
+      expect(before.indexOf('Tender ID')).toBeGreaterThan(before.indexOf('Opportunity / Mission'))
+
+      await userEvent.click(screen.getByRole('button', { name: 'Tender ID column menu' }))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Freeze column' }))
+      await waitFor(() => expect(screen.queryByRole('menuitem', { name: 'Freeze column' })).not.toBeInTheDocument())
+      expect(leafHeaders()).toEqual(before) // stays where it is; it sticks once scrolled to
+      expect(leafTh('gemTenderId').className).toContain('sticky')
+      expect(leafTh('gemTenderId').style.left).toBe('40px') // right after the 40px selection column
+
+      await userEvent.click(screen.getByRole('button', { name: 'Opportunity / Mission column menu' }))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Freeze column' }))
+      await waitFor(() => expect(screen.queryByRole('menuitem', { name: 'Freeze column' })).not.toBeInTheDocument())
+      // Two frozen columns, each sticking after the frozen widths before it.
+      expect(leafHeaders()).toEqual(before)
+      const first = leafTh('opportunityName'); const second = leafTh('gemTenderId')
+      expect(first.style.left).toBe('40px')
+      expect(second.style.left).toBe('320px') // 40 + the 280px name column
+      expect(first.className).toContain('sticky')
+      expect(leafTh('bidCode').className).not.toContain('sticky')
+      expect(screen.getAllByTitle('Frozen column')).toHaveLength(2)
+      // The last frozen column carries the divider from the scrolling area.
+      expect(second.className).toContain('border-r-2')
+      // The shadow colour comes from the theme (--grid-frozen-shadow, defined for light and dark in index.css).
+      expect(second.style.boxShadow).toContain('var(--grid-frozen-shadow)')
+      expect(first.className).not.toContain('border-r-2')
+      expect(first.style.boxShadow).not.toContain('--grid-frozen-shadow')
+
+      await userEvent.click(screen.getByRole('button', { name: 'Tender ID column menu' }))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Unfreeze column' }))
+      expect(leafTh('gemTenderId').className).not.toContain('sticky')
+      expect(leafHeaders()).toEqual(before)
+      expect(screen.getAllByTitle('Frozen column')).toHaveLength(1)
+    })
+
+    it('the frozen body cells stick too, and the choice is remembered', async () => {
+      await makeBid('Alpha')
+      const first = renderGrid()
+      await screen.findByText('Alpha')
+      await userEvent.click(screen.getByRole('button', { name: 'City column menu' }))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Freeze column' }))
+      const row = screen.getByTestId('bid-row')
+      const stuck = Array.from(row.querySelectorAll('td')).filter((td) => td.className.includes('sticky'))
+      expect(stuck).toHaveLength(2) // selection + City
+      expect(JSON.parse(localStorage.getItem('goms:bidGrid:frozenColumns')!)).toEqual(['city'])
+      first.unmount()
+      renderGrid()
+      await screen.findByText('Alpha')
+      expect(leafTh('city').className).toContain('sticky')
+    })
+
+    it('Manage columns freezes and unfreezes a column in place, beside Hide and Delete', async () => {
+      await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      const before = leafHeaders()
+      await userEvent.click(screen.getByRole('button', { name: /^Manage columns/ }))
+      const panel = await screen.findByTestId('columns-panel')
+      await userEvent.click(within(panel).getByRole('button', { name: 'Freeze City' }))
+      expect(leafTh('city').className).toContain('sticky')
+      expect(leafTh('city').style.left).toBe('40px')
+      expect(leafHeaders()).toEqual(before)
+      const unfreeze = within(panel).getByRole('button', { name: 'Unfreeze City' })
+      expect(unfreeze).toHaveAttribute('aria-pressed', 'true')
+      await userEvent.click(unfreeze)
+      expect(leafTh('city').className).not.toContain('sticky')
+    })
+
+    it('the group header over a frozen column stays with it', async () => {
+      await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await userEvent.click(screen.getByRole('button', { name: 'City column menu' }))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Freeze column' }))
+      const stuck = Array.from(document.querySelectorAll<HTMLElement>('th[scope=colgroup]')).filter((th) => th.className.includes('sticky'))
+      expect(stuck.map((th) => th.textContent)).toEqual(['Client'])
+      expect(stuck[0].style.left).toBe('40px')
+    })
+
+    it('freezing survives sorting, and freezing a hidden column set does not break the sheet', async () => {
+      await makeBid('Alpha'); await makeBid('Beta')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await userEvent.click(screen.getByRole('button', { name: 'Vertical column menu' }))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Freeze column' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Sort by Opportunity / Mission' }))
+      expect(rowNames()).toEqual(['Alpha', 'Beta'])
+      expect(leafTh('vertical').className).toContain('sticky')
+    })
+  })
+
+  describe('new column types', () => {
+    it('currency: edits as an amount, shows ₹ with Indian grouping, sorts numerically', async () => {
+      const { bid } = await bidWithColumn('currency', 'Budget')
+      const other = await makeBid('Beta')
+      const f = (await repository.listBidCustomFields())[0]
+      await repository.setBidCustomValue(other.id, f.id, 900000)
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getAllByRole('button', { name: 'Edit Budget' })[0])
+      await userEvent.type(screen.getByRole('spinbutton', { name: 'Budget' }), '750000{Enter}')
+      await waitFor(async () => expect((await repository.listBidCustomValues(bid.id)).budget).toBe(750000))
+      expect(await screen.findByText('₹7,50,000')).toBeInTheDocument()
+      expect(screen.getByText('₹9,00,000')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Sort by Budget' }))
+      expect(rowNames()).toEqual(['Alpha', 'Beta'])
+      await userEvent.click(screen.getByRole('button', { name: 'Sort by Budget' }))
+      expect(rowNames()).toEqual(['Beta', 'Alpha'])
+    })
+
+    it('url / email / phone: validated inline, rendered as links', async () => {
+      const bid = await makeBid('Alpha')
+      for (const [name, type] of [['Site', 'url'], ['Mail', 'email'], ['Phone', 'phone']] as const) {
+        await repository.createBidCustomField({ name, dataType: type })
+      }
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Mail' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Mail' }), 'bad{Enter}')
+      expect(await screen.findByRole('alert')).toHaveTextContent(/valid email/)
+      await userEvent.clear(screen.getByRole('textbox', { name: 'Mail' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Mail' }), 'Ravi@Client.IN{Enter}')
+      await userEvent.click(await screen.findByRole('button', { name: 'Edit Site' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Site' }), 'gem.gov.in/b/1{Enter}')
+      await userEvent.click(await screen.findByRole('button', { name: 'Edit Phone' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Phone' }), '98765 43210{Enter}')
+      await waitFor(async () => expect(await repository.listBidCustomValues(bid.id)).toEqual({
+        mail: 'ravi@client.in', site: 'https://gem.gov.in/b/1', phone: '9876543210',
+      }))
+      // Unlocked, the text is plain so a click always starts the edit; locked, it is a link again.
+      expect(screen.queryByRole('link', { name: 'ravi@client.in' })).not.toBeInTheDocument()
+      await userEvent.click(lockSwitch())
+      expect(await screen.findByRole('link', { name: 'ravi@client.in' })).toHaveAttribute('href', 'mailto:ravi@client.in')
+      expect(screen.getByRole('link', { name: 'https://gem.gov.in/b/1' })).toHaveAttribute('href', 'https://gem.gov.in/b/1')
+      expect(screen.getByRole('link', { name: '9876543210' })).toHaveAttribute('href', 'tel:9876543210')
+    })
+
+    it('person: picks a Sales Team member, stores the id, shows the name, sorts and searches by name', async () => {
+      const { bid } = await bidWithColumn('person', 'Lead')
+      const other = await makeBid('Beta')
+      const asha = await repository.createSalesPerson({ name: 'Asha Rao', officialEmail: 'asha@amnex.com', designation: 'RM', tierKey: 'rm' })
+      const zed = await repository.createSalesPerson({ name: 'Zed Khan', officialEmail: 'zed@amnex.com', designation: 'RM', tierKey: 'rm' })
+      const f = (await repository.listBidCustomFields())[0]
+      await repository.setBidCustomValue(other.id, f.id, zed.id)
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getAllByRole('button', { name: 'Edit Lead' })[0])
+      await userEvent.click(await screen.findByRole('option', { name: 'Asha Rao' }))
+      await waitFor(async () => expect((await repository.listBidCustomValues(bid.id)).lead).toBe(asha.id))
+      expect(await screen.findByText('Asha Rao')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Sort by Lead' }))
+      expect(rowNames()).toEqual(['Alpha', 'Beta']) // Asha < Zed by name
+      await userEvent.type(screen.getByRole('searchbox', { name: 'Search bids' }), 'zed')
+      expect(rowNames()).toEqual(['Beta'])
+    })
+
+    it('department and state: pick from the live records', async () => {
+      const { bid } = await bidWithColumn('department', 'Nodal Dept')
+      const dept = await repository.createNode({ domain: 'org', typeKey: 'department', parentId: null, stateCode: 27, name: 'Health Dept' })
+      const state = (await repository.listStates())[0]
+      await repository.createBidCustomField({ name: 'Where', dataType: 'state' })
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Nodal Dept' }))
+      await userEvent.click(await screen.findByRole('option', { name: 'Health Dept' }))
+      await waitFor(async () => expect((await repository.listBidCustomValues(bid.id)).nodal_dept).toBe(dept.id))
+      await userEvent.click(await screen.findByRole('button', { name: 'Edit Where' }))
+      await userEvent.click(await screen.findByRole('option', { name: state.name }))
+      await waitFor(async () => expect((await repository.listBidCustomValues(bid.id)).where).toBe(state.code))
+      expect(await screen.findByText(state.name)).toBeInTheDocument()
+    })
+
+    it('multi-select: tick several options, Done saves, shown as chips', async () => {
+      const { bid } = await bidWithColumn('multiselect', 'Regions', ['West', 'North', 'South'])
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Regions' }))
+      const list = await screen.findByRole('listbox', { name: 'Regions options' })
+      await userEvent.click(within(list).getByRole('checkbox', { name: 'South' }))
+      await userEvent.click(within(list).getByRole('checkbox', { name: 'West' }))
+      await userEvent.click(within(list).getByRole('button', { name: 'Done' }))
+      await waitFor(async () => expect((await repository.listBidCustomValues(bid.id)).regions).toBe('["West","South"]'))
+      expect(await screen.findByText('West')).toBeInTheDocument()
+      expect(screen.getByText('South')).toBeInTheDocument()
+    })
+
+    it('multi-select: Cancel in the editor writes nothing', async () => {
+      const { bid } = await bidWithColumn('multiselect', 'Regions', ['West', 'North'])
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Regions' }))
+      const list = await screen.findByRole('listbox', { name: 'Regions options' })
+      await userEvent.click(within(list).getByRole('checkbox', { name: 'West' }))
+      await userEvent.click(within(list).getByRole('button', { name: 'Cancel' }))
+      expect(await repository.listBidCustomValues(bid.id)).toEqual({})
+    })
+
+    it('Add column offers the new types, grouped, and creates a multi-select with options', async () => {
+      await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await userEvent.click(screen.getByRole('button', { name: /^Manage columns/ }))
+      await userEvent.click(await screen.findByRole('button', { name: /Add column/ }))
+      const dialog = await screen.findByRole('dialog')
+      const select = within(dialog).getByRole('combobox')
+      const options = within(select).getAllByRole('option').map((o) => o.textContent)
+      for (const label of ['Text', 'Number', 'Date', 'Yes / No', 'Dropdown (single)', 'Dropdown (multiple)', 'Amount (₹)', 'URL', 'Email', 'Phone', 'Sales person', 'Department', 'State']) {
+        expect(options).toContain(label)
+      }
+      await userEvent.type(within(dialog).getByRole('textbox', { name: /Column name/ }), 'Regions')
+      await userEvent.selectOptions(select, 'Dropdown (multiple)')
+      const boxes = within(dialog).getAllByRole('textbox').filter((b) => !/Column name/.test(b.getAttribute('aria-label') ?? ''))
+      await userEvent.type(boxes[boxes.length - 2], 'West')
+      await userEvent.type(boxes[boxes.length - 1], 'North')
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Add column' }))
+      await waitFor(async () => expect((await repository.listBidCustomFields()).find((f) => f.name === 'Regions')).toMatchObject({ dataType: 'multiselect', options: ['West', 'North'] }))
+    })
+  })
+
+  describe('Notion-style editing of GOMS-linked cells', () => {
+    it('Bid Owner: pick a Sales Team member by searching; it records an ownership assignment', async () => {
+      const bid = await makeBid('Alpha')
+      const asha = await repository.createSalesPerson({ name: 'Asha Rao', officialEmail: 'asha@amnex.com', designation: 'RM', tierKey: 'rm' })
+      await repository.createSalesPerson({ name: 'Zed Khan', officialEmail: 'zed@amnex.com', designation: 'RM', tierKey: 'rm' })
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Bid Owner' }))
+      const list = await screen.findByRole('listbox', { name: 'Bid Owner' })
+      // Options carry an avatar (aria-hidden initials) beside the name.
+      expect(within(list).getAllByRole('option').map(visibleName)).toEqual(expect.arrayContaining(['Asha Rao', 'Zed Khan'])) // every saved sales person
+      await userEvent.type(screen.getByRole('textbox', { name: 'Search Bid Owner' }), 'zed')
+      expect(within(list).getAllByRole('option').map(visibleName)).toEqual(['Zed Khan'])
+      await userEvent.clear(screen.getByRole('textbox', { name: 'Search Bid Owner' }))
+      await userEvent.click(await within(list).findByRole('option', { name: 'Asha Rao' }))
+      await waitFor(async () => {
+        const rows = await repository.listBidsForGrid()
+        expect(rows.find((r) => r.id === bid.id)?.ownerEmail).toBe('asha@amnex.com')
+      })
+      const history = await repository.listOwnershipAssignments()
+      expect(history.some((a) => a.entityId === bid.id && a.salesPersonId === asha.id)).toBe(true)
+      // The cell shows the owner's name (with avatar), not the raw email.
+      expect(await within(screen.getByTestId('bid-row')).findByText('Asha Rao')).toBeInTheDocument()
+    })
+
+    it('Bid Stage and Decision pick from their lists; a Go before Submitted is refused inline', async () => {
+      const bid = await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Bid Stage' }))
+      await userEvent.click(await screen.findByRole('option', { name: 'Qualification' }))
+      await waitFor(async () => expect((await repository.getBid(bid.id))!.stageKey).toBe('qualification'))
+      await userEvent.click(await screen.findByRole('button', { name: 'Edit Decision' }))
+      await userEvent.click(await screen.findByRole('option', { name: 'Go' }))
+      expect(await screen.findByText(/Cannot mark Go before the bid reaches Submitted/)).toBeInTheDocument()
+      expect((await repository.getBid(bid.id))!.decision).toBe('pending')
+    })
+
+    it('Tender Link edits as text', async () => {
+      const bid = await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Tender Link' }))
+      await userEvent.type(screen.getByRole('textbox', { name: 'Tender Link' }), 'https://gem.gov.in/b/9{Enter}')
+      await waitFor(async () => expect((await repository.getBid(bid.id))!.tenderLink).toBe('https://gem.gov.in/b/9'))
+    })
+
+    it('Escape closes a pick-list without changing the cell', async () => {
+      const bid = await makeBid('Alpha')
+      renderGrid()
+      await screen.findByText('Alpha')
+      await unlock()
+      await userEvent.click(screen.getByRole('button', { name: 'Edit Bid Stage' }))
+      await screen.findByRole('listbox', { name: 'Bid Stage' })
+      await userEvent.keyboard('{Escape}')
+      await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Bid Stage' })).not.toBeInTheDocument())
+      expect((await repository.getBid(bid.id))!.stageKey).toBe('solutioning')
+    })
+  })
+
+  describe('AND / OR filters', () => {
+    async function seed() {
+      await makeBid('Alpha'); await makeBid('Beta'); await makeBid('Gamma'); await makeBid('Delta')
+    }
+    const addFilter = async (scope: HTMLElement = document.body) => userEvent.click(within(scope).getAllByRole('button', { name: 'Add filter' })[0])
+    const setRule = async (rule: HTMLElement, field: string, operator: string, value: string) => {
+      await userEvent.selectOptions(within(rule).getByRole('combobox', { name: 'Field' }), field)
+      await userEvent.selectOptions(within(rule).getByRole('combobox', { name: 'Operator' }), operator)
+      await userEvent.type(within(rule).getByRole('textbox', { name: 'Value' }), value)
+    }
+
+    it('the And/Or dropdown switches the top-level connective to OR', async () => {
+      await seed()
+      renderGrid()
+      await screen.findByText('Alpha')
+      await userEvent.click(screen.getByRole('button', { name: /^Filters/ }))
+      await addFilter(); await setRule(screen.getAllByTestId('filter-rule')[0], 'Opportunity / Mission', 'equals', 'Alpha')
+      await addFilter(); await setRule(screen.getAllByTestId('filter-rule')[1], 'Opportunity / Mission', 'equals', 'Gamma')
+      await waitFor(() => expect(rowNames()).toEqual([]))  // all of: nothing is both
+      await userEvent.selectOptions(screen.getAllByRole('combobox', { name: 'Connective' })[0], 'Or')
+      await waitFor(() => expect(rowNames().sort()).toEqual(['Alpha', 'Gamma']))
+      expect(screen.getByTestId('active-filters')).toHaveTextContent(/Alpha.*or.*Gamma/)
+    })
+
+    it('builds Name = Delta AND (Name starts with A OR Name starts with B …) — a group inside an AND list', async () => {
+      await seed()
+      renderGrid()
+      await screen.findByText('Alpha')
+      await userEvent.click(screen.getByRole('button', { name: /^Filters/ }))
+      await addFilter()
+      await setRule(screen.getAllByTestId('filter-rule')[0], 'Opportunity / Mission', 'contains', 'a') // Alpha Gamma Delta Beta(a)
+      await userEvent.click(screen.getByRole('button', { name: 'Add group' }))
+      const group = await screen.findByTestId('filter-group')
+      const [r1, r2] = within(group).getAllByTestId('filter-rule')
+      await setRule(r1, 'Opportunity / Mission', 'starts with', 'Al')
+      await setRule(r2, 'Opportunity / Mission', 'starts with', 'Ga')
+      await waitFor(() => expect(rowNames().sort()).toEqual(['Alpha', 'Gamma']))
+      // The group reads as a bracketed OR in the active-filter bar.
+      const bar = screen.getByTestId('active-filters')
+      const bracket = within(bar).getByTestId('active-filter-group')
+      expect(bracket).toHaveTextContent(/starts with Al.*or.*starts with Ga/)
+      expect(bar).toHaveTextContent(/contains a.*and/)
+    })
+
+    it('flipping the group dropdown to And ANDs its conditions; Ungroup folds them back into the list', async () => {
+      await seed()
+      renderGrid()
+      await screen.findByText('Alpha')
+      await userEvent.click(screen.getByRole('button', { name: /^Filters/ }))
+      await addFilter()
+      await userEvent.click(screen.getByRole('button', { name: 'Add group' }))
+      const group = await screen.findByTestId('filter-group')
+      const [r1, r2] = within(group).getAllByTestId('filter-rule')
+      await setRule(r1, 'Opportunity / Mission', 'contains', 'a')
+      await setRule(r2, 'Opportunity / Mission', 'contains', 'p')
+      const rootRule = screen.getAllByTestId('filter-rule')[0]
+      await setRule(rootRule, 'Opportunity / Mission', 'contains', 'l')
+      // Default for a group in an "all" list is "any": a-or-p, and l.
+      await waitFor(() => expect(rowNames().sort()).toEqual(['Alpha', 'Delta']))
+      await userEvent.selectOptions(within(group).getAllByRole('combobox', { name: 'Connective' }).slice(-1)[0], 'And')
+      await waitFor(() => expect(rowNames()).toEqual(['Alpha'])) // l, a and p
+      await userEvent.click(within(group).getByRole('button', { name: 'Ungroup' }))
+      expect(screen.queryByTestId('filter-group')).not.toBeInTheDocument()
+      expect(screen.getAllByTestId('filter-rule')).toHaveLength(3)
+      await waitFor(() => expect(rowNames()).toEqual(['Alpha']))
+    })
+
+    it('removing a group\'s rules removes the group; a chip × removes just that condition', async () => {
+      await seed()
+      renderGrid({ filterRules: [
+        { field: 'opportunityName', operator: 'contains', value: 'a' },
+        { logic: 'or', rules: [
+          { field: 'opportunityName', operator: 'startsWith', value: 'Al' },
+          { field: 'opportunityName', operator: 'startsWith', value: 'Ga' },
+        ] },
+      ] })
+      await screen.findByText('Alpha')
+      await waitFor(() => expect(rowNames().sort()).toEqual(['Alpha', 'Gamma']))
+      await userEvent.click(screen.getByRole('button', { name: 'Clear filter Opportunity / Mission starts with Ga' }))
+      await waitFor(() => expect(rowNames()).toEqual(['Alpha']))
+      await userEvent.click(screen.getByRole('button', { name: 'Clear filter Opportunity / Mission starts with Al' }))
+      await waitFor(() => expect(rowNames().sort()).toEqual(['Alpha', 'Beta', 'Delta', 'Gamma']))
+      expect(screen.queryByTestId('active-filter-group')).not.toBeInTheDocument()
+    })
+
+    it('custom columns and entity columns filter inside a group', async () => {
+      const [a, b] = [await makeBid('Alpha'), await makeBid('Beta')]; await makeBid('Gamma')
+      const tier = await repository.createBidCustomField({ name: 'Tier', dataType: 'select', options: ['Gold', 'Silver'] })
+      const lead = await repository.createBidCustomField({ name: 'Lead', dataType: 'person' })
+      const asha = await repository.createSalesPerson({ name: 'Asha Rao', officialEmail: 'asha@amnex.com', designation: 'RM', tierKey: 'rm' })
+      await repository.setBidCustomValue(a.id, tier.id, 'Gold')
+      await repository.setBidCustomValue(b.id, lead.id, asha.id)
+      renderGrid({ filterRules: [{ logic: 'or', rules: [
+        { field: 'custom:tier', operator: 'eq', value: 'Gold' },
+        { field: 'custom:lead', operator: 'eq', value: asha.id },
+      ] }] })
+      await screen.findByText('Alpha')
+      await waitFor(() => expect(rowNames().sort()).toEqual(['Alpha', 'Beta']))
+      // The chip reads the person's NAME, not the id.
+      expect(screen.getByTestId('active-filters')).toHaveTextContent('Lead is Asha Rao')
+    })
+
+    it('the State column filters by state name (a pick-list, not a code)', async () => {
+      await seed()
+      renderGrid()
+      await screen.findByText('Alpha')
+      await userEvent.click(screen.getByRole('button', { name: 'State column menu' }))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Filter by this column' }))
+      const rule = await screen.findByTestId('filter-rule')
+      expect(within(rule).getByRole('combobox', { name: 'Field' })).toHaveValue('stateCode')
+      const state = (await repository.listStates())[0]
+      expect(within(within(rule).getByRole('combobox', { name: 'Value' })).getByRole('option', { name: state.name })).toBeInTheDocument()
+    })
+  })
+})
+
+void fireEvent

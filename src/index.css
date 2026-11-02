@@ -1,0 +1,660 @@
+@import "tailwindcss" source(none);
+@config "../tailwind.config.ts";
+@source "./";
+@source "../index.html";
+
+/* Preserve the v3 scales while the application moves to Tailwind 4. */
+@theme {
+  --radius-sm: 0.125rem;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --blur-sm: 4px;
+  --default-ring-width: 3px;
+  --default-ring-color: var(--color-blue-500);
+}
+
+@utility outline-none {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+@layer base {
+  *, ::before, ::after, ::backdrop, ::file-selector-button {
+    border-color: var(--color-gray-200, currentColor);
+  }
+
+  input::placeholder, textarea::placeholder {
+    color: var(--color-gray-400);
+  }
+
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  dialog {
+    margin: auto;
+  }
+  /* Theme tokens — RGB channels consumed by tailwind.config.ts's `c()`.
+     `.dark` is toggled on <html> by src/lib/theme.ts (and pre-paint by the
+     inline script in index.html, so a reload never flashes light). */
+  :root,
+  .light {
+    color-scheme: light;
+    --c-ink: 26 35 50;
+    --c-ink-900: 15 41 66;
+    --c-ink-800: 20 49 76;
+    --c-ink-700: 30 58 95;
+    --c-ink-600: 43 74 112;
+    --c-paper: 255 255 255;
+    --c-panel: 241 243 247;
+    --c-line: 221 227 236;
+    --c-white: 250 250 247;
+    --c-muted: 92 107 128;
+    --c-scrim: 15 41 66;
+    --c-shadow: 15 41 66;
+    --c-edge: 183 194 208;
+
+    --c-grid-head: 244 247 250;
+    --c-grid-hover: 242 248 253;
+    --c-grid-selected: 228 241 251;
+    --c-grid-frozen: 251 253 255;
+    --c-grid-readonly: 243 246 249;
+    --c-grid-sorted: 234 244 252;
+    --c-grid-tab: 241 246 250;
+    --grid-sheet: linear-gradient(180deg, #f4f8fc 0%, #ebf2f9 100%);
+    --grid-bevel: inset 1px 1px 0 rgba(255, 255, 255, 0.95), inset -1px -1px 0 rgba(11, 43, 73, 0.07);
+    --grid-frozen-shadow: 3px 0 5px -2px rgba(11, 43, 73, 0.28);
+
+    --c-indigo: 91 110 232;
+    --c-indigo-600: 68 83 196;
+    --c-indigo-100: 231 234 252;
+    --c-teal: 42 127 111;
+    --c-teal-700: 15 118 110;
+    --c-teal-600: 34 105 91;
+    --c-teal-100: 221 238 233;
+    --c-crimson: 178 58 72;
+    --c-crimson-100: 246 224 227;
+    --c-blue: 47 111 191;
+    --c-blue-700: 29 78 216;
+    --c-blue-600: 36 90 158;
+    --c-blue-200: 191 219 254;
+    --c-blue-100: 222 233 246;
+    --c-blue-50: 239 246 255;
+    --c-purple: 122 90 201;
+    --c-purple-600: 98 71 168;
+    --c-purple-100: 235 228 247;
+    --c-emerald: 47 143 91;
+    --c-emerald-800: 6 95 70;
+    --c-emerald-700: 4 120 87;
+    --c-emerald-600: 38 116 74;
+    --c-emerald-200: 167 243 208;
+    --c-emerald-100: 220 239 227;
+    --c-emerald-50: 236 253 245;
+    --c-amber: 199 122 42;
+    --c-amber-900: 120 53 15;
+    --c-amber-800: 146 64 14;
+    --c-amber-700: 180 83 9;
+    --c-amber-600: 165 100 31;
+    --c-amber-500: 245 158 11;
+    --c-amber-400: 251 191 36;
+    --c-amber-200: 253 230 138;
+    --c-amber-100: 247 233 214;
+    --c-amber-50: 255 251 235;
+    --c-rose-700: 190 18 60;
+    --c-rose-50: 255 241 242;
+    --c-red-700: 185 28 28;
+    --c-red-600: 220 38 38;
+    --c-red-200: 254 202 202;
+    --c-red-50: 254 242 242;
+    --c-sky-800: 7 89 133;
+    --c-sky-700: 3 105 161;
+    --c-sky-50: 240 249 255;
+    --c-goms-navy: 11 43 73;
+    --c-goms-sky: 76 167 221;
+    --c-goms-green: 116 192 92;
+  }
+
+  /* Night: pitch-black canvas with neutral charcoal surfaces. Neutrals invert
+     (ink = light text, paper = dark canvas), so `bg-ink-900 text-paper`
+     primary buttons become light-on-dark automatically; accents are lifted
+     for contrast and their `-100`/`-50` tints become low-light washes. */
+  .dark {
+    color-scheme: dark;
+    --c-ink: 230 230 230;
+    --c-ink-900: 245 245 245;
+    --c-ink-800: 220 220 220;
+    --c-ink-700: 200 200 200;
+    --c-ink-600: 165 165 165;
+    --c-paper: 10 10 10;
+    --c-panel: 20 20 20;
+    --c-line: 40 40 40;
+    --c-white: 0 0 0;
+    --c-muted: 145 145 145;
+    --c-scrim: 0 0 0;
+    --c-shadow: 0 0 0;
+    --c-edge: 70 70 70;
+
+    --c-grid-head: 18 18 18;
+    --c-grid-hover: 28 28 28;
+    --c-grid-selected: 32 32 32;
+    --c-grid-frozen: 12 12 12;
+    --c-grid-readonly: 8 8 8;
+    --c-grid-sorted: 24 24 24;
+    --c-grid-tab: 14 14 14;
+    --grid-sheet: linear-gradient(180deg, #0a0a0a 0%, #000000 100%);
+    --grid-bevel: inset 1px 1px 0 rgba(255, 255, 255, 0.04), inset -1px -1px 0 rgba(0, 0, 0, 0.35);
+    --grid-frozen-shadow: 3px 0 6px -2px rgba(0, 0, 0, 0.6);
+
+    --c-indigo: 139 155 255;
+    --c-indigo-600: 165 177 255;
+    --c-indigo-100: 31 38 82;
+    --c-teal: 63 184 160;
+    --c-teal-700: 125 216 197;
+    --c-teal-600: 92 203 180;
+    --c-teal-100: 14 46 42;
+    --c-crimson: 240 112 127;
+    --c-crimson-100: 60 24 33;
+    --c-blue: 91 155 234;
+    --c-blue-700: 156 197 247;
+    --c-blue-600: 125 179 242;
+    --c-blue-200: 30 62 102;
+    --c-blue-100: 20 42 71;
+    --c-blue-50: 15 31 54;
+    --c-purple: 166 139 235;
+    --c-purple-600: 187 165 242;
+    --c-purple-100: 38 29 69;
+    --c-emerald: 76 194 133;
+    --c-emerald-800: 163 232 194;
+    --c-emerald-700: 134 223 175;
+    --c-emerald-600: 107 212 156;
+    --c-emerald-200: 27 77 51;
+    --c-emerald-100: 16 48 31;
+    --c-emerald-50: 13 37 25;
+    --c-amber: 230 160 85;
+    --c-amber-900: 251 227 196;
+    --c-amber-800: 248 212 166;
+    --c-amber-700: 245 197 138;
+    --c-amber-600: 240 181 114;
+    --c-amber-500: 242 174 61;
+    --c-amber-400: 245 194 77;
+    --c-amber-200: 92 66 22;
+    --c-amber-100: 58 40 18;
+    --c-amber-50: 42 30 15;
+    --c-rose-700: 251 141 165;
+    --c-rose-50: 45 18 25;
+    --c-red-700: 252 165 165;
+    --c-red-600: 248 113 113;
+    --c-red-200: 92 35 40;
+    --c-red-50: 45 20 22;
+    --c-sky-800: 166 216 245;
+    --c-sky-700: 124 196 240;
+    --c-sky-50: 14 34 51;
+    --c-goms-navy: 225 225 225;
+    --c-goms-sky: 93 182 234;
+    --c-goms-green: 134 207 110;
+  }
+
+  /* Applied by theme.ts for one frame-set while switching, when the View
+     Transitions API isn't available — a soft crossfade instead of a snap. */
+  .theme-fade,
+  .theme-fade *,
+  .theme-fade *::before,
+  .theme-fade *::after {
+    transition:
+      background-color 280ms ease,
+      border-color 280ms ease,
+      color 200ms ease,
+      fill 280ms ease,
+      stroke 280ms ease !important;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-paper text-ink font-sans antialiased cursor-default;
+    font-feature-settings: 'cv05', 'ss01';
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply font-display;
+    letter-spacing: -0.01em;
+  }
+  ::selection {
+    background: rgb(var(--c-ink-800));
+    color: rgb(var(--c-paper));
+  }
+}
+
+/* Circular day/night reveal (theme.ts) — the new snapshot grows out of the
+   toggle that was clicked; the old one stays put underneath. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-new(root) {
+  z-index: 2;
+}
+
+/* The Amnex wordmark is dark navy on transparent. In night mode, invert
+   lightness while rotating hue back, so navy reads as a light blue and the
+   red mark stays red. */
+.dark .brand-logo {
+  filter: invert(1) hue-rotate(180deg) saturate(1.2);
+}
+
+@layer components {
+  .code-chip {
+    @apply inline-flex items-center rounded-md bg-ink-900/[0.06] px-1.5 py-0.5 font-mono text-[11px] font-medium tracking-tight text-ink-700;
+  }
+  .eyebrow {
+    @apply font-mono text-[11px] font-medium uppercase tracking-[0.18em] text-muted;
+  }
+  .hairline {
+    @apply border-line;
+  }
+  .focus-ring {
+    @apply outline-none ring-2 ring-indigo/70 ring-offset-1 ring-offset-paper;
+  }
+  /* Soft "neumorphic" surfaces (Opportunity Timeline): a light highlight on the
+     top-left and a soft shade bottom-right. --neu-* switch for dark mode. */
+  .neu-raised {
+    background: linear-gradient(145deg, rgb(var(--c-white)), rgb(var(--c-panel)));
+    box-shadow: -4px -4px 10px var(--neu-hi), 5px 5px 14px var(--neu-lo);
+  }
+  .neu-raised-sm {
+    background: linear-gradient(145deg, rgb(var(--c-white)), rgb(var(--c-panel)));
+    box-shadow: -2px -2px 6px var(--neu-hi), 3px 3px 8px var(--neu-lo);
+  }
+  .neu-inset {
+    background: rgb(var(--c-panel) / 0.6);
+    box-shadow: inset 2px 2px 6px var(--neu-lo), inset -2px -2px 6px var(--neu-hi);
+  }
+}
+
+:root, .light {
+  --neu-hi: rgb(255 255 255 / 0.95);
+  --neu-lo: rgb(15 41 66 / 0.11);
+}
+.dark {
+  --neu-hi: rgb(255 255 255 / 0.035);
+  --neu-lo: rgb(0 0 0 / 0.5);
+}
+
+/* Survey-chart grid backdrop */
+.survey-grid {
+  background-image:
+    linear-gradient(to right, rgb(var(--c-ink-900) / 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(var(--c-ink-900) / 0.05) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--c-ink-600) / 0.35) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgb(var(--c-ink-600) / 0.35);
+  border-radius: 999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Accessibility preferences (Apple HIG): reduce motion, reduce transparency, increase contrast. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  [class*='backdrop-blur'] { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; background-color: rgb(var(--c-paper)) !important; }
+}
+@media (prefers-contrast: more) {
+  :root { --tw-ring-opacity: 1; }
+  [class*='border-line'] { border-color: currentColor !important; }
+  [class*='text-muted'] { opacity: 1 !important; }
+}
+
+/* Skeleton loading placeholders (components/ui/Skeleton.tsx): a calm tinted block with a soft
+   highlight sweeping across it. Theme-aware through the same color tokens as the rest of the app. */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+  background: rgb(var(--c-ink-900) / 0.07);
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(var(--c-white) / 0.6), transparent);
+  animation: skeleton-shimmer 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes skeleton-shimmer {
+  to { transform: translateX(100%); }
+}
+.dark .skeleton::after {
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.08), transparent);
+}
+.dark .skeleton {
+  background: rgb(var(--c-ink-900) / 0.1);
+}
+
+/* Dropdowns. Every single-choice <select> in the app gets the same look as the app's own pickers: a field with a
+   turning chevron and a glowing focus, and an option list that is a rounded panel which drops in, with a tint on the
+   option under the pointer and a bold, checked current choice.
+   This uses the browser's customisable select (appearance: base-select), which styles the real <select>: forms,
+   keyboard, accessibility and every component that reads or sets it are unchanged. A browser without it keeps its
+   native control. */
+@supports (appearance: base-select) {
+  select:not([multiple]):not([size]),
+  select:not([multiple]):not([size])::picker(select) {
+    appearance: base-select;
+  }
+
+  select:not([multiple]):not([size]) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    transition: border-color 200ms, box-shadow 200ms;
+  }
+  select:not([multiple]):not([size]):disabled { cursor: not-allowed; }
+  select:not([multiple]):not([size]):hover:not(:disabled) { border-color: rgb(var(--c-goms-sky) / 0.6); }
+  select:not([multiple]):not([size]):open,
+  select:not([multiple]):not([size]):focus-visible {
+    outline: none;
+    border-color: rgb(var(--c-goms-sky));
+    box-shadow: 0 0 0 4px rgb(var(--c-goms-sky) / 0.15);
+  }
+  /* The browser's triangle is swapped for the app's chevron (drawn as a mask so it takes the text colour). */
+  select::picker-icon {
+    content: '';
+    flex: none;
+    width: 14px;
+    height: 14px;
+    background: rgb(var(--c-muted));
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+    transition: rotate 300ms ease, background-color 300ms ease;
+  }
+  select:open::picker-icon {
+    rotate: 180deg;
+    background: rgb(var(--c-goms-sky));
+  }
+
+  select::picker(select) {
+    margin-block: 6px;
+    padding: 6px;
+    border: 1px solid rgb(var(--c-line) / 0.7);
+    border-radius: 16px;
+    background: rgb(var(--c-paper) / 0.98);
+    box-shadow: 0 12px 40px rgb(var(--c-shadow) / 0.18);
+    max-block-size: min(20rem, 55vh);
+    overflow-y: auto;
+    transform-origin: top center;
+    /* Closed state, and so the way out: quick and light. */
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+    transition:
+      opacity 150ms ease-in,
+      transform 150ms ease-in,
+      display 150ms allow-discrete,
+      overlay 150ms allow-discrete;
+  }
+  /* Open state, and so the way in: a longer, softer ease-out that settles without a hard stop. */
+  select:open::picker(select) {
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity 260ms cubic-bezier(0.16, 1, 0.3, 1),
+      transform 340ms cubic-bezier(0.16, 1, 0.3, 1),
+      display 340ms allow-discrete,
+      overlay 340ms allow-discrete;
+  }
+  @starting-style {
+    select:open::picker(select) {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.97);
+    }
+  }
+
+  select option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    color: rgb(var(--c-ink));
+    --stagger: 0ms;
+    transition:
+      background-color 160ms ease,
+      color 160ms ease,
+      opacity 280ms cubic-bezier(0.16, 1, 0.3, 1) var(--stagger),
+      transform 280ms cubic-bezier(0.16, 1, 0.3, 1) var(--stagger);
+  }
+  @starting-style {
+    select:open option {
+      opacity: 0;
+      transform: translateY(-5px);
+    }
+  }
+  select option:nth-child(2) { --stagger: 25ms; }
+  select option:nth-child(3) { --stagger: 50ms; }
+  select option:nth-child(4) { --stagger: 75ms; }
+  select option:nth-child(5) { --stagger: 100ms; }
+  select option:nth-child(6) { --stagger: 125ms; }
+  select option:nth-child(7) { --stagger: 150ms; }
+  select option:nth-child(n + 8) { --stagger: 175ms; }
+  select option:not(:disabled):is(:hover, :focus-visible) { background: rgb(var(--c-goms-sky) / 0.15); }
+  select option:checked {
+    font-weight: 600;
+    color: rgb(var(--c-goms-navy));
+  }
+  select option:disabled { opacity: 0.45; }
+  select option::checkmark {
+    order: 1;
+    margin-inline-start: auto;
+    color: rgb(var(--c-goms-sky));
+    scale: 1;
+    transition: scale 320ms cubic-bezier(0.34, 1.56, 0.64, 1) 120ms;
+  }
+  @starting-style {
+    select:open option:checked::checkmark { scale: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    select::picker(select), select option, select option::checkmark, select::picker-icon { transition-duration: 0.01ms !important; transition-delay: 0s !important; }
+  }
+  select optgroup { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: rgb(var(--c-muted)); }
+}
+
+/* Entrance motion. A page fades and rises as it opens; the children of an .enter-stagger container rise in one after
+   another (cards, tiles, table rows). Both stand still for people who ask for reduced motion. */
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+.page-enter { animation: page-enter 420ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.enter-stagger > * { animation: rise-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.enter-stagger > :nth-child(2) { animation-delay: 60ms; }
+.enter-stagger > :nth-child(3) { animation-delay: 120ms; }
+.enter-stagger > :nth-child(4) { animation-delay: 180ms; }
+.enter-stagger > :nth-child(5) { animation-delay: 240ms; }
+.enter-stagger > :nth-child(6) { animation-delay: 290ms; }
+.enter-stagger > :nth-child(7) { animation-delay: 340ms; }
+.enter-stagger > :nth-child(8) { animation-delay: 390ms; }
+.enter-stagger > :nth-child(9) { animation-delay: 430ms; }
+.enter-stagger > :nth-child(n + 10) { animation-delay: 470ms; }
+@media (prefers-reduced-motion: reduce) {
+  .page-enter, .enter-stagger > * { animation: none; }
+}
+
+/* Tables that fold. useFoldingTable marks the columns that no longer fit with data-folded: they fade out and leave the
+   layout, and a row's arrow (at the right of its first cell) opens the folded values under it as labelled details. */
+:is(.fold-table, [data-fold-table]) { min-width: 0 !important; }
+:is(.fold-table, [data-fold-table]) [data-folded] {
+  display: none;
+  opacity: 0;
+  transition: opacity 220ms ease, display 220ms allow-discrete;
+}
+:is(.fold-table, [data-fold-table])[data-fold-measure], :is(.fold-table, [data-fold-table])[data-fold-measure] * { transition: none !important; animation: none !important; }
+:is(.fold-table, [data-fold-table])[data-folding] tbody tr > :first-child { position: relative; padding-right: 2.25rem; cursor: default; }
+:is(.fold-table, [data-fold-table])[data-folding] tbody tr > :first-child::after {
+  content: '';
+  position: absolute;
+  right: 0.85rem;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-right: 1.6px solid rgb(var(--c-muted));
+  border-bottom: 1.6px solid rgb(var(--c-muted));
+  translate: 0 -65%;
+  rotate: 45deg;
+  transition: rotate 260ms cubic-bezier(0.16, 1, 0.3, 1), border-color 160ms ease;
+}
+:is(.fold-table, [data-fold-table])[data-folding] tbody tr > :first-child:hover::after { border-color: rgb(var(--c-goms-sky)); }
+:is(.fold-table, [data-fold-table]) tbody tr[data-fold-open] > :first-child::after { rotate: 225deg; translate: 0 -35%; border-color: rgb(var(--c-goms-sky)); }
+:is(.fold-table, [data-fold-table]) tbody tr[data-fold-open] {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  align-items: start;
+  gap: 0.6rem 1.25rem;
+  background: rgb(var(--c-goms-sky) / 0.06);
+}
+:is(.fold-table, [data-fold-table]) tbody tr[data-fold-open] > :first-child { grid-column: 1 / -1; }
+:is(.fold-table, [data-fold-table]) tbody tr[data-fold-open] > [data-folded] {
+  display: block;
+  opacity: 1;
+  border: 0;
+  animation: fold-detail 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+:is(.fold-table, [data-fold-table]) tbody tr[data-fold-open] > [data-folded]::before {
+  content: attr(data-label);
+  display: block;
+  margin-bottom: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgb(var(--c-muted));
+}
+:is(.fold-table, [data-fold-table]) tbody tr[data-fold-open] > [data-folded]:nth-child(2n) { animation-delay: 40ms; }
+:is(.fold-table, [data-fold-table]) tbody tr[data-fold-open] > [data-folded]:nth-child(3n) { animation-delay: 80ms; }
+@keyframes fold-detail {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.fold-table, [data-fold-table]) [data-folded], :is(.fold-table, [data-fold-table]) tbody tr > :first-child::after { transition-duration: 0.01ms; }
+  :is(.fold-table, [data-fold-table]) tbody tr[data-fold-open] > [data-folded] { animation: none; }
+}
+
+/* The splitter on a table's right edge: drag to narrow the table, and its columns fold to fit. */
+.table-splitter {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  cursor: col-resize;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 180ms ease;
+  outline: none;
+}
+[data-splittable]:hover > .table-splitter, .table-splitter:focus-visible, .table-splitter[data-dragging] { opacity: 1; }
+.table-splitter > i {
+  display: block;
+  width: 5px;
+  height: 34px;
+  border-radius: 999px;
+  background: rgb(var(--c-goms-sky));
+  box-shadow: 0 0 0 3px rgb(var(--c-goms-sky) / 0.18);
+  transition: height 200ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 200ms ease;
+}
+.table-splitter:hover > i, .table-splitter[data-dragging] > i { height: 48px; box-shadow: 0 0 0 5px rgb(var(--c-goms-sky) / 0.22); }
+.table-splitter[data-dragging]::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 2px;
+  background: rgb(var(--c-goms-sky) / 0.55);
+}
+.table-splitter[data-width]::after {
+  content: attr(data-width);
+  position: absolute;
+  top: 6px;
+  right: 18px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #fff;
+  background: rgb(var(--c-goms-sky));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+.table-splitter[data-dragging][data-width]::after { opacity: 1; }
+@media (hover: none) { .table-splitter { opacity: 0.7; } }
+@media (max-width: 640px) { .table-splitter { display: none; } }
+@media (prefers-reduced-motion: reduce) { .table-splitter, .table-splitter > i { transition-duration: 0.01ms; } }
+
+/* Cards (marked by lib/cardMotion.ts): a small lift on hover and a slight press, like the reference demo. `translate`
+   and `scale` are independent of `transform`, so they never fight the entrance animation or a card's own transform. */
+[data-card] { transition: translate 360ms cubic-bezier(0.16, 1, 0.3, 1), scale 200ms ease-out, box-shadow 360ms cubic-bezier(0.16, 1, 0.3, 1); }
+@media (hover: hover) and (pointer: fine) {
+  [data-card='sm']:hover { translate: 0 -3px; box-shadow: 0 14px 30px -14px rgb(var(--c-shadow) / 0.28); }
+}
+[data-card='sm']:active { scale: 0.992; }
+@media (prefers-reduced-motion: reduce) {
+  [data-card] { transition: none; }
+  [data-card='sm']:hover { translate: none; }
+}
+
+/* <Typewriter>: letters drop in one after another, then the caret blinks out. */
+.typewriter { display: inline-flex; align-items: center; white-space: pre; }
+.typewriter-char { display: inline-block; opacity: 0; transform: translateY(0.45em); animation: typewriter-char 380ms cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.typewriter-caret { width: 2px; height: 1.05em; margin-left: 2px; background: currentColor; opacity: 0; animation: typewriter-caret 1.1s steps(1) 2 forwards; }
+@keyframes typewriter-char { to { opacity: 1; transform: none; } }
+@keyframes typewriter-caret { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .typewriter-char { opacity: 1; transform: none; animation: none; }
+  .typewriter-caret { display: none; }
+}
+
+/* Rows that sharpen in one after another, top to bottom: each row (and then its cells, left to right) fades up out of a
+   blur. A row's place in the order is its `--i` (set by the list). Used by the Document Maker file list. */
+.row-reveal > [role='row'] { animation: row-reveal 720ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i, 0) * 70ms); }
+.row-reveal > [role='row'] > [role='cell'] { animation: row-reveal 640ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i, 0) * 70ms + 90ms); }
+.row-reveal > [role='row'] > [role='cell']:nth-child(2) { animation-delay: calc(var(--i, 0) * 70ms + 150ms); }
+.row-reveal > [role='row'] > [role='cell']:nth-child(3) { animation-delay: calc(var(--i, 0) * 70ms + 210ms); }
+.row-reveal > [role='row'] > [role='cell']:nth-child(n + 4) { animation-delay: calc(var(--i, 0) * 70ms + 270ms); }
+@keyframes row-reveal { from { opacity: 0; filter: blur(8px); transform: translateY(8px); } to { opacity: 1; filter: blur(0); transform: none; } }
+@media (prefers-reduced-motion: reduce) { .row-reveal > [role='row'], .row-reveal > [role='row'] > [role='cell'] { animation: none; } }

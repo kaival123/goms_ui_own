@@ -1,0 +1,377 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
+import * as api from '@/lib/api'
+import { EmployeeDetails } from './EmployeeDetails'
+import type { Employee, HierNode, SalesPerson, TimelineEvent } from '@/lib/types'
+
+/** Sections live in tabs under the profile header; open the one a test looks at. */
+function renderOnTab(tab: RegExp) {
+  render(<MemoryRouter><EmployeeDetails employeeId="emp-1" /></MemoryRouter>)
+  fireEvent.click(screen.getByRole('button', { name: tab }))
+}
+
+beforeEach(() => {
+  // jsdom has no ResizeObserver; FitText (the header name) uses one purely
+  // to recompute font-fit sizing, which this suite never asserts on. Mirrors
+  // HierarchyCanvas.test.tsx's stub.
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  })
+})
+
+// Task 9.1 (Avatar rollout): ChainRow's photo-vs-initials rendering was a
+// real pre-existing bug fix — the reporting-chain rows used to render an
+// ad-hoc initials div with no photo support at all, so a photoUrl'd manager
+// or report never showed a picture. This suite is scoped to that bug fix,
+// not the rest of EmployeeDetails's many actions/dialogs — those are
+// mocked out, mirroring EmployeeFormDialog.test.tsx and
+// SalesPersonDetails.test.tsx's approach to unrelated child dialogs.
+vi.mock('@/features/employees/EmployeeFormDialog', () => ({ EmployeeFormDialog: () => null }))
+vi.mock('@/features/employees/MarkDuplicateDialog', () => ({ MarkDuplicateDialog: () => null }))
+vi.mock('@/features/employees/MergeEmployeesDialog', () => ({ MergeEmployeesDialog: () => null }))
+// Task 8.4: mocked with a small visible marker (rather than `() => null`) so
+// this file's Edit-button test can assert the dialog actually receives the
+// clicked entry as `existingEvent`, not just that the dialog opened.
+vi.mock('@/features/employees/TimelineEventDialog', () => ({
+  TimelineEventDialog: (props: { open: boolean; existingEvent?: { id: string; title: string } }) =>
+    props.open ? <div data-testid="timeline-dialog">{props.existingEvent ? `editing:${props.existingEvent.title}` : 'add-mode'}</div> : null,
+}))
+vi.mock('@/features/employees/TransferDialog', () => ({ TransferDialog: () => null }))
+vi.mock('@/features/employees/ChargeDialog', () => ({ ChargeDialog: () => null }))
+vi.mock('@/features/employees/VisitingCard', () => ({ VisitingCard: () => null }))
+vi.mock('@/features/sales/OwnershipBlock', () => ({ OwnershipBlock: () => null }))
+
+vi.mock('@/features/workspace/context', () => ({
+  useWorkspace: () => ({ selection: null, select: vi.fn(), clearSelection: vi.fn(), editEmployee: vi.fn(), addEmployee: vi.fn() }),
+}))
+
+function makeEmployee(overrides: Partial<Employee> = {}): Employee {
+  return {
+    id: 'emp-1', code: 'C1', name: 'Existing Person', designation: 'Officer',
+    email: '', phone: '', company: '', address: '', website: '',
+    photoUrl: null, orgNodeId: 'root', managerId: null, vacant: false, connected: false,
+    relationshipStatus: 'new', relationshipQuality: 'neutral', relationshipType: '', introducedBy: '',
+    importantContact: false, preferredComm: [], lastInteractionAt: null, followUpDate: null, notes: '',
+    charges: [], visitingCards: [], metadata: {}, status: 'active',
+    ...overrides,
+  }
+}
+
+function makeNode(overrides: Partial<HierNode> & { id: string }): HierNode {
+  return {
+    domain: 'org', typeKey: 'department', parentId: null, stateCode: 5,
+    name: overrides.id, code: null, sortOrder: 0, metadata: {}, status: 'active',
+    ...overrides,
+  }
+}
+
+function makeSalesPerson(overrides: Partial<SalesPerson> = {}): SalesPerson {
+  return {
+    id: 'sp-1', employeeCode: 'E1', name: 'Sales Owner', officialEmail: 'owner@amnex.com',
+    personalEmail: '', mobile: '', altMobile: '', joinedOn: null, leftOn: null,
+    status: 'active', notes: '', metadata: {}, createdAt: '2026-01-01',
+    ...overrides,
+  } as SalesPerson
+}
+
+function stubApiHooks(opts: { employee: Employee; chain?: Employee[]; reports?: Employee[]; timeline?: TimelineEvent[]; salesPersons?: SalesPerson[]; orgNode?: HierNode | null; trail?: HierNode[] }) {
+  vi.spyOn(api, 'useEmployee').mockImplementation((id: string | null) =>
+    ({ data: id === opts.employee.id ? opts.employee : null } as unknown as ReturnType<typeof api.useEmployee>))
+  vi.spyOn(api, 'useReportingChain').mockReturnValue({ data: opts.chain ?? [] } as unknown as ReturnType<typeof api.useReportingChain>)
+  vi.spyOn(api, 'useDirectReports').mockReturnValue({ data: opts.reports ?? [] } as unknown as ReturnType<typeof api.useDirectReports>)
+  vi.spyOn(api, 'useNode').mockReturnValue({ data: opts.orgNode ?? null } as unknown as ReturnType<typeof api.useNode>)
+  vi.spyOn(api, 'useBreadcrumb').mockReturnValue({ data: opts.trail ?? [] } as unknown as ReturnType<typeof api.useBreadcrumb>)
+  vi.spyOn(api, 'useTimeline').mockReturnValue({ data: opts.timeline ?? [] } as unknown as ReturnType<typeof api.useTimeline>)
+  vi.spyOn(api, 'useTransfers').mockReturnValue({ data: [] } as unknown as ReturnType<typeof api.useTransfers>)
+  vi.spyOn(api, 'useFollowUps').mockReturnValue({ data: [] } as unknown as ReturnType<typeof api.useFollowUps>)
+  vi.spyOn(api, 'useAllEmployees').mockReturnValue({ data: [] } as unknown as ReturnType<typeof api.useAllEmployees>)
+  vi.spyOn(api, 'useEmployeeDepartments').mockReturnValue({ data: {} } as unknown as ReturnType<typeof api.useEmployeeDepartments>)
+  vi.spyOn(api, 'useResolvedOwners').mockReturnValue({ data: {} } as unknown as ReturnType<typeof api.useResolvedOwners>)
+  vi.spyOn(api, 'useSalesPersons').mockReturnValue({ data: opts.salesPersons ?? [] } as unknown as ReturnType<typeof api.useSalesPersons>)
+  vi.spyOn(api, 'useCurrentPostings').mockReturnValue({ data: {} } as unknown as ReturnType<typeof api.useCurrentPostings>)
+  vi.spyOn(api, 'useEmployeeMutations').mockReturnValue({
+    remove: { mutateAsync: vi.fn() },
+    removeCharge: { mutateAsync: vi.fn() },
+    setManager: { mutateAsync: vi.fn() },
+    setTimelineEventAttended: { mutate: vi.fn() },
+    updateTimelineEvent: { mutateAsync: vi.fn() },
+    update: { mutateAsync: vi.fn() },
+  } as unknown as ReturnType<typeof api.useEmployeeMutations>)
+}
+
+describe('EmployeeDetails — ChainRow Avatar rollout (Task 9.1)', () => {
+  it('renders a photo for a reporting-chain manager whose photoUrl is set', () => {
+    const emp = makeEmployee()
+    const manager = makeEmployee({ id: 'mgr-1', name: 'Manager Boss', photoUrl: 'https://example.com/mgr.jpg' })
+    stubApiHooks({ employee: emp, chain: [manager] })
+
+    renderOnTab(/^Reporting line$/)
+
+    const img = screen.getByAltText('Manager Boss')
+    expect(img).toHaveAttribute('src', 'https://example.com/mgr.jpg')
+  })
+
+  it('renders initials for a reporting-chain manager with no photoUrl', () => {
+    const emp = makeEmployee()
+    const manager = makeEmployee({ id: 'mgr-1', name: 'Manager Boss', photoUrl: null })
+    stubApiHooks({ employee: emp, chain: [manager] })
+
+    renderOnTab(/^Reporting line$/)
+
+    expect(screen.getByText('MB')).toBeInTheDocument()
+    expect(screen.queryByAltText('Manager Boss')).not.toBeInTheDocument()
+  })
+
+  it('renders a photo for a direct report whose photoUrl is set', () => {
+    const emp = makeEmployee()
+    const report = makeEmployee({ id: 'rep-1', name: 'Report Person', photoUrl: 'https://example.com/rep.jpg' })
+    stubApiHooks({ employee: emp, reports: [report] })
+
+    renderOnTab(/^Reporting line$/)
+
+    const img = screen.getByAltText('Report Person')
+    expect(img).toHaveAttribute('src', 'https://example.com/rep.jpg')
+  })
+})
+
+// Task 9.2: the legacy "Relationship Owner / AMNEX Representative" row shows
+// an avatar next to the resolved SalesPerson's name — falls back to initials
+// when that SalesPerson has no photoUrl, renders their photo when they do.
+describe('EmployeeDetails — Relationship Owner avatar (Task 9.2)', () => {
+  it('shows an avatar next to the resolved Relationship Owner', () => {
+    const owner = makeSalesPerson({ id: 'sp-owner', name: 'Rita Owner', officialEmail: 'rita@amnex.com' })
+    const emp = makeEmployee({ metadata: { relationshipOwner: 'rita@amnex.com' } })
+    stubApiHooks({ employee: emp, salesPersons: [owner] })
+
+    render(<MemoryRouter><EmployeeDetails employeeId="emp-1" /></MemoryRouter>)
+
+    expect(screen.getByText(/Rita Owner/)).toBeInTheDocument()
+    expect(screen.getAllByTestId('avatar').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it("renders the Relationship Owner's photo as an image when their SalesPerson record has one", () => {
+    const owner = makeSalesPerson({
+      id: 'sp-owner', name: 'Rita Owner', officialEmail: 'rita@amnex.com', photoUrl: 'data:image/png;base64,AAA=',
+    })
+    const emp = makeEmployee({ metadata: { relationshipOwner: 'rita@amnex.com' } })
+    stubApiHooks({ employee: emp, salesPersons: [owner] })
+
+    render(<MemoryRouter><EmployeeDetails employeeId="emp-1" /></MemoryRouter>)
+
+    expect(screen.getByRole('img')).toHaveAttribute('src', 'data:image/png;base64,AAA=')
+  })
+})
+
+function makeTimelineEvent(overrides: Partial<TimelineEvent> = {}): TimelineEvent {
+  return {
+    id: 'evt-1', employeeId: 'emp-1', type: 'meeting', title: 'Budget review',
+    date: '2026-01-01', note: '', source: 'manual',
+    ...overrides,
+  }
+}
+
+// Task 8.2 (Item 13): Agenda/Outcome/Next Steps must each render in their own
+// labeled section when present, and must add nothing to the timeline entry
+// when absent — so old entries (which have none of these fields) look
+// exactly as they did before this feature shipped.
+describe('EmployeeDetails — Timeline Agenda/Outcome/Next Steps display (Task 8.2)', () => {
+  it('shows each populated field in its own labeled section', () => {
+    const emp = makeEmployee()
+    const event = makeTimelineEvent({
+      agenda: 'Discuss Q1 budget', outcome: 'Approved with revisions', nextSteps: 'Send revised sheet by Friday',
+    })
+    stubApiHooks({ employee: emp, timeline: [event] })
+
+    renderOnTab(/^Timeline/)
+
+    expect(screen.getByText('Agenda:')).toBeInTheDocument()
+    expect(screen.getByText('Discuss Q1 budget')).toBeInTheDocument()
+    expect(screen.getByText('Outcome:')).toBeInTheDocument()
+    expect(screen.getByText('Approved with revisions')).toBeInTheDocument()
+    expect(screen.getByText('Next steps:')).toBeInTheDocument()
+    expect(screen.getByText('Send revised sheet by Friday')).toBeInTheDocument()
+  })
+
+  it('renders nothing extra for an old entry with no agenda/outcome/nextSteps', () => {
+    const emp = makeEmployee()
+    const event = makeTimelineEvent({ note: 'Just a plain note' })
+    stubApiHooks({ employee: emp, timeline: [event] })
+
+    renderOnTab(/^Timeline/)
+
+    expect(screen.getByText('Just a plain note')).toBeInTheDocument()
+    expect(screen.queryByText('Agenda:')).not.toBeInTheDocument()
+    expect(screen.queryByText('Outcome:')).not.toBeInTheDocument()
+    expect(screen.queryByText('Next steps:')).not.toBeInTheDocument()
+  })
+})
+
+// Task 8.3: attendees can now be a mix of legacy plain strings and new
+// {salesPersonId, name} snapshots within the SAME event's array (a record
+// added before this change, later appended to via draft restore, or just two
+// eras of data sitting side by side) — the display line must render both
+// shapes correctly via the attendeeName() normalizer rather than assuming
+// every entry is a string.
+//
+// Task 9.4 supersedes the plain comma-joined string with an Avatar+name pair
+// per attendee — the mixed-shape requirement carries forward unchanged, only
+// the rendering shape does.
+describe('EmployeeDetails — attendee display, mixed legacy/new shapes (Task 8.3 / 9.4 avatars)', () => {
+  it('renders both legacy plain-string and new {salesPersonId, name} attendees in one event, each with an avatar', () => {
+    const emp = makeEmployee()
+    const event = makeTimelineEvent({
+      attendees: ['Legacy Name', { salesPersonId: 'sp-1', name: 'New Snapshot Name' }],
+    })
+    const salesPerson = makeSalesPerson({ id: 'sp-1', name: 'New Snapshot Name' })
+    stubApiHooks({ employee: emp, timeline: [event], salesPersons: [salesPerson] })
+
+    renderOnTab(/^Timeline/)
+
+    expect(screen.getByText('Attendees')).toBeInTheDocument()
+    expect(screen.getByText('Legacy Name')).toBeInTheDocument()
+    expect(screen.getByText('New Snapshot Name')).toBeInTheDocument()
+    // One avatar per attendee, both as initials — the legacy plain-string
+    // shape can never resolve to a SalesPerson record, and this SalesPerson
+    // fixture has no photoUrl set either.
+    expect(screen.getAllByTestId('avatar').length).toBeGreaterThanOrEqual(2)
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('renders a legacy plain-string attendee with no crash and no lookup by a nonexistent id', () => {
+    const emp = makeEmployee()
+    const event = makeTimelineEvent({ attendees: ['Just A Name'] })
+    stubApiHooks({ employee: emp, timeline: [event], salesPersons: [] })
+
+    renderOnTab(/^Timeline/)
+
+    expect(screen.getByText('Just A Name')).toBeInTheDocument()
+    expect(screen.getAllByTestId('avatar').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it("renders the new-shape attendee's photo when their resolved SalesPerson record has one", () => {
+    const emp = makeEmployee()
+    const event = makeTimelineEvent({
+      attendees: [{ salesPersonId: 'sp-1', name: 'New Snapshot Name' }],
+    })
+    const salesPerson = makeSalesPerson({ id: 'sp-1', name: 'New Snapshot Name', photoUrl: 'data:image/png;base64,AAA=' })
+    stubApiHooks({ employee: emp, timeline: [event], salesPersons: [salesPerson] })
+
+    renderOnTab(/^Timeline/)
+
+    expect(screen.getByRole('img')).toHaveAttribute('src', 'data:image/png;base64,AAA=')
+  })
+
+  it('renders nothing for an event with no attendees', () => {
+    const emp = makeEmployee()
+    const event = makeTimelineEvent({ attendees: undefined })
+    stubApiHooks({ employee: emp, timeline: [event] })
+
+    renderOnTab(/^Timeline/)
+
+    expect(screen.queryByText('Attendees')).not.toBeInTheDocument()
+  })
+})
+
+// Task 8.4 (Item 14): a manual entry gets a per-entry Edit button that opens
+// TimelineEventDialog with `existingEvent` set to that exact record — a
+// system-generated entry (joined/transferred) gets none, since there's
+// nothing user-editable about it.
+describe('EmployeeDetails — per-entry Edit action (Task 8.4)', () => {
+  it('clicking Edit on a manual entry opens the dialog with that record as existingEvent', async () => {
+    const user = userEvent.setup()
+    const emp = makeEmployee()
+    const event = makeTimelineEvent({ id: 'evt-42', title: 'Quarterly review', source: 'manual' })
+    stubApiHooks({ employee: emp, timeline: [event] })
+
+    renderOnTab(/^Timeline/)
+
+    expect(screen.queryByTestId('timeline-dialog')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /edit quarterly review/i }))
+
+    expect(screen.getByTestId('timeline-dialog')).toHaveTextContent('editing:Quarterly review')
+  })
+
+  it('does not show an Edit button on a system-generated entry', () => {
+    const emp = makeEmployee()
+    const event = makeTimelineEvent({ id: 'evt-joined', type: 'joined', title: 'Contact created', source: 'system' })
+    stubApiHooks({ employee: emp, timeline: [event] })
+
+    renderOnTab(/^Timeline/)
+
+    expect(screen.queryByRole('button', { name: /edit contact created/i })).not.toBeInTheDocument()
+  })
+})
+
+// Item 4: Website/Address are department-owned — the employee form no longer
+// exposes them, and the detail view must inherit the mapped department's
+// values rather than showing a stale/blank employee-level field. Department
+// is the source of truth; a legacy employee-level value only shows for old
+// records whose department has no value of its own (so history isn't
+// silently blanked), and never alongside a department value (no conflicting
+// pair shown at once).
+describe('EmployeeDetails — Website/Address department inheritance (Item 4)', () => {
+  it('shows the mapped department\'s Website and Address, not blank, for an employee with no legacy values', () => {
+    const dept = makeNode({ id: 'dept-1', typeKey: 'department', metadata: { website: 'https://dept.example.gov.in', officeAddress: '1 Secretariat Road' } })
+    const emp = makeEmployee({ orgNodeId: 'dept-1', website: '', address: '' })
+    stubApiHooks({ employee: emp, orgNode: dept, trail: [dept] })
+
+    render(<MemoryRouter><EmployeeDetails employeeId="emp-1" /></MemoryRouter>)
+
+    expect(screen.getByText('https://dept.example.gov.in')).toBeInTheDocument()
+    expect(screen.getByText('1 Secretariat Road')).toBeInTheDocument()
+  })
+
+  it('prefers the department\'s values over a stale employee-level value, with no conflicting employee value shown', () => {
+    const dept = makeNode({ id: 'dept-1', typeKey: 'department', metadata: { website: 'https://new-dept.example.gov.in', officeAddress: 'New HQ Address' } })
+    const emp = makeEmployee({ orgNodeId: 'dept-1', website: 'https://old-legacy-site.example.com', address: 'Old legacy address' })
+    stubApiHooks({ employee: emp, orgNode: dept, trail: [dept] })
+
+    render(<MemoryRouter><EmployeeDetails employeeId="emp-1" /></MemoryRouter>)
+
+    expect(screen.getByText('https://new-dept.example.gov.in')).toBeInTheDocument()
+    expect(screen.getByText('New HQ Address')).toBeInTheDocument()
+    expect(screen.queryByText('https://old-legacy-site.example.com')).not.toBeInTheDocument()
+    expect(screen.queryByText('Old legacy address')).not.toBeInTheDocument()
+  })
+
+  it('falls back to a historical employee-level value when the department has none (backward compatibility)', () => {
+    const dept = makeNode({ id: 'dept-1', typeKey: 'department', metadata: {} })
+    const emp = makeEmployee({ orgNodeId: 'dept-1', website: 'https://legacy-only.example.com', address: 'Legacy-only address' })
+    stubApiHooks({ employee: emp, orgNode: dept, trail: [dept] })
+
+    render(<MemoryRouter><EmployeeDetails employeeId="emp-1" /></MemoryRouter>)
+
+    expect(screen.getByText('https://legacy-only.example.com')).toBeInTheDocument()
+    expect(screen.getByText('Legacy-only address')).toBeInTheDocument()
+  })
+
+  it('resolves the nearest department when the employee is posted under a nested branch/office (Department → Department nesting)', () => {
+    const outerDept = makeNode({ id: 'outer-dept', typeKey: 'department', metadata: { website: 'https://outer.example.gov.in', officeAddress: 'Outer address' } })
+    const innerDept = makeNode({ id: 'inner-dept', typeKey: 'department', parentId: 'outer-dept', metadata: { website: 'https://inner.example.gov.in', officeAddress: 'Inner address' } })
+    const office = makeNode({ id: 'office-1', typeKey: 'office', parentId: 'inner-dept', metadata: {} })
+    const emp = makeEmployee({ orgNodeId: 'office-1', website: '', address: '' })
+    stubApiHooks({ employee: emp, orgNode: office, trail: [outerDept, innerDept, office] })
+
+    render(<MemoryRouter><EmployeeDetails employeeId="emp-1" /></MemoryRouter>)
+
+    expect(screen.getByText('https://inner.example.gov.in')).toBeInTheDocument()
+    expect(screen.getByText('Inner address')).toBeInTheDocument()
+    expect(screen.queryByText('https://outer.example.gov.in')).not.toBeInTheDocument()
+  })
+
+  it('shows nothing for Website/Address when neither the department nor the employee has a value', () => {
+    const dept = makeNode({ id: 'dept-1', typeKey: 'department', metadata: {} })
+    const emp = makeEmployee({ orgNodeId: 'dept-1', website: '', address: '' })
+    stubApiHooks({ employee: emp, orgNode: dept, trail: [dept] })
+
+    render(<MemoryRouter><EmployeeDetails employeeId="emp-1" /></MemoryRouter>)
+
+    expect(screen.queryByText('Website')).not.toBeInTheDocument()
+    expect(screen.queryByText('Address')).not.toBeInTheDocument()
+  })
+})

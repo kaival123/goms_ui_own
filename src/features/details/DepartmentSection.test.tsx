@@ -1,0 +1,219 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import * as api from '@/lib/api'
+import { DepartmentSection } from './DepartmentSection'
+import type { Employee, HierNode, SalesPerson, TimelineEvent } from '@/lib/types'
+
+// This suite is scoped to Task 8.5's new "Meetings" section — every other
+// piece of DepartmentSection (head, sales ownership, Works pipeline) is
+// exercised elsewhere, so their hooks/children are stubbed to empty/no-op.
+vi.mock('@/features/workspace/context', () => ({ useWorkspace: () => ({ select: vi.fn() }) }))
+vi.mock('@/features/nodes/WorksEditor', () => ({ WorksEditor: () => null }))
+vi.mock('@/features/sales/OwnershipBlock', () => ({ OwnershipBlock: () => null }))
+
+function makeNode(overrides: Partial<HierNode> = {}): HierNode {
+  return {
+    id: 'dept-1', domain: 'org', typeKey: 'department', parentId: null, stateCode: 27,
+    name: 'Health', code: null, sortOrder: 0, metadata: {}, status: 'active',
+    ...overrides,
+  }
+}
+
+function makeEmployee(overrides: Partial<Employee> = {}): Employee {
+  return {
+    id: 'emp-1', code: 'C1', name: 'Some Person', designation: 'Officer',
+    email: '', phone: '', company: '', address: '', website: '',
+    photoUrl: null, orgNodeId: 'dept-1', managerId: null, vacant: false, connected: false,
+    relationshipStatus: 'new', relationshipQuality: 'neutral', relationshipType: '', introducedBy: '',
+    importantContact: false, preferredComm: [], lastInteractionAt: null, followUpDate: null, notes: '',
+    charges: [], visitingCards: [], metadata: {}, status: 'active',
+    ...overrides,
+  }
+}
+
+function makeSalesPerson(overrides: Partial<SalesPerson> = {}): SalesPerson {
+  return {
+    id: 'sp-1', employeeCode: '', name: 'Sales Person', officialEmail: 'sales@amnex.com',
+    personalEmail: '', mobile: '', altMobile: '', joinedOn: null, leftOn: null,
+    status: 'active', photoUrl: null, notes: '', metadata: {}, createdAt: '', createdBy: null,
+    ...overrides,
+  }
+}
+
+function makeTimelineEvent(overrides: Partial<TimelineEvent> = {}): TimelineEvent {
+  return {
+    id: 'evt-1', employeeId: 'emp-1', type: 'meeting', title: 'Budget review',
+    date: '2026-01-01', note: '', source: 'manual',
+    ...overrides,
+  }
+}
+
+function stubHooks(opts: {
+  deptById?: Record<string, { id: string; name: string }>
+  timelineEvents?: TimelineEvent[]
+}) {
+  vi.spyOn(api, 'useSalesPersons').mockReturnValue({ data: [] } as unknown as ReturnType<typeof api.useSalesPersons>)
+  vi.spyOn(api, 'useCurrentPostings').mockReturnValue({ data: {} } as unknown as ReturnType<typeof api.useCurrentPostings>)
+  vi.spyOn(api, 'useOpportunitiesByDepartment').mockReturnValue({ data: [] } as unknown as ReturnType<typeof api.useOpportunitiesByDepartment>)
+  vi.spyOn(api, 'useResolvedOwners').mockReturnValue({ data: {} } as unknown as ReturnType<typeof api.useResolvedOwners>)
+  vi.spyOn(api, 'useNode').mockReturnValue({ data: undefined } as unknown as ReturnType<typeof api.useNode>)
+  vi.spyOn(api, 'useSalesPerson').mockReturnValue({ data: undefined } as unknown as ReturnType<typeof api.useSalesPerson>)
+  vi.spyOn(api, 'useSalesPostings').mockReturnValue({ data: [] } as unknown as ReturnType<typeof api.useSalesPostings>)
+  vi.spyOn(api, 'useEmployeeDepartments').mockReturnValue({ data: opts.deptById ?? {} } as unknown as ReturnType<typeof api.useEmployeeDepartments>)
+  vi.spyOn(api, 'useAllTimelineEvents').mockReturnValue({ data: opts.timelineEvents ?? [] } as unknown as ReturnType<typeof api.useAllTimelineEvents>)
+}
+
+describe('DepartmentSection — Meetings section (Task 8.5)', () => {
+  it('shows a meeting logged against a direct-child employee of the department', () => {
+    const node = makeNode({ id: 'dept-1' })
+    const event = makeTimelineEvent({ id: 'evt-1', employeeId: 'emp-direct', title: 'Direct child meeting' })
+    stubHooks({
+      deptById: { 'emp-direct': { id: 'dept-1', name: 'Health' } },
+      timelineEvents: [event],
+    })
+
+    render(<DepartmentSection node={node} employees={[makeEmployee({ id: 'emp-direct' })]} />)
+
+    expect(screen.getByText('Direct child meeting')).toBeInTheDocument()
+  })
+
+  it('shows a meeting logged against an employee several levels down (subtree), via the resolved-department join', () => {
+    const node = makeNode({ id: 'dept-1' })
+    // deptById already resolves each employee to their *nearest ancestor
+    // department* regardless of how many office/unit levels sit in between —
+    // this is what makes the section subtree-inclusive with no separate walk.
+    const event = makeTimelineEvent({ id: 'evt-deep', employeeId: 'emp-deep', title: 'Deep subtree meeting' })
+    stubHooks({
+      deptById: { 'emp-deep': { id: 'dept-1', name: 'Health' } },
+      timelineEvents: [event],
+    })
+
+    render(<DepartmentSection node={node} employees={[makeEmployee({ id: 'emp-deep' })]} />)
+
+    expect(screen.getByText('Deep subtree meeting')).toBeInTheDocument()
+  })
+
+  it('does not show a meeting logged against an employee under a different department', () => {
+    const node = makeNode({ id: 'dept-1' })
+    const event = makeTimelineEvent({ id: 'evt-other', employeeId: 'emp-other', title: 'Other department meeting' })
+    stubHooks({
+      deptById: { 'emp-other': { id: 'dept-2', name: 'Roads' } },
+      timelineEvents: [event],
+    })
+
+    render(<DepartmentSection node={node} employees={[makeEmployee({ id: 'emp-other' })]} />)
+
+    expect(screen.queryByText('Other department meeting')).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Meetings/)).not.toBeInTheDocument()
+  })
+
+  it('renders the exact same record (same id) as would show on the employee page — not a duplicate/copy', () => {
+    const node = makeNode({ id: 'dept-1' })
+    const event = makeTimelineEvent({ id: 'evt-shared', employeeId: 'emp-direct', title: 'Shared record' })
+    stubHooks({
+      deptById: { 'emp-direct': { id: 'dept-1', name: 'Health' } },
+      timelineEvents: [event],
+    })
+
+    render(<DepartmentSection node={node} employees={[makeEmployee({ id: 'emp-direct' })]} />)
+
+    // Exactly one rendering of this entry's title — this section reads the
+    // same `TimelineEvent[]` (same ids) rather than constructing its own copy.
+    expect(screen.getAllByText('Shared record')).toHaveLength(1)
+  })
+
+  // Item 15: aggregating meetings from multiple contacts under one department
+  // page is meaningless without saying WHICH contact each entry is about —
+  // unlike the single-employee profile (where it's implicit), this view
+  // spans many people, so each entry must name its contact.
+  it('shows which contact each aggregated meeting belongs to', () => {
+    const node = makeNode({ id: 'dept-1' })
+    const eventA = makeTimelineEvent({ id: 'evt-a', employeeId: 'emp-a', title: 'Meeting with Asha' })
+    const eventB = makeTimelineEvent({ id: 'evt-b', employeeId: 'emp-b', title: 'Meeting with Bilal' })
+    stubHooks({
+      deptById: { 'emp-a': { id: 'dept-1', name: 'Health' }, 'emp-b': { id: 'dept-1', name: 'Health' } },
+      timelineEvents: [eventA, eventB],
+    })
+
+    render(<DepartmentSection
+      node={node}
+      employees={[makeEmployee({ id: 'emp-a', name: 'Asha Rao' }), makeEmployee({ id: 'emp-b', name: 'Bilal Khan' })]}
+    />)
+
+    expect(screen.getByText('Meeting with Asha')).toBeInTheDocument()
+    expect(screen.getByText('Meeting with Bilal')).toBeInTheDocument()
+    expect(screen.getByText('Asha Rao')).toBeInTheDocument()
+    expect(screen.getByText('Bilal Khan')).toBeInTheDocument()
+  })
+
+  // Item 11: a person's name must never render bare — the concerned contact
+  // on an aggregated department meeting is exactly the surface the Excel
+  // requirement calls out by name ("... meetings and similar areas").
+  it('shows an avatar next to the concerned contact\'s name on each aggregated meeting', () => {
+    const node = makeNode({ id: 'dept-1' })
+    const event = makeTimelineEvent({ id: 'evt-a', employeeId: 'emp-a', title: 'Meeting with Asha' })
+    stubHooks({
+      deptById: { 'emp-a': { id: 'dept-1', name: 'Health' } },
+      timelineEvents: [event],
+    })
+
+    render(<DepartmentSection
+      node={node}
+      employees={[makeEmployee({ id: 'emp-a', name: 'Asha Rao', photoUrl: 'https://example.com/asha.jpg' })]}
+    />)
+
+    expect(screen.getByRole('img', { name: 'Asha Rao' })).toBeInTheDocument()
+  })
+})
+
+// Task 9.2: the department head row shows an avatar next to the resolved
+// employee's name (same {name, photoUrl, vacant} shape ChainRow already uses
+// for the reporting chain, since `head` is a real Employee record).
+describe('DepartmentSection — department head avatar (Task 9.2)', () => {
+  it('shows an avatar next to the department head', () => {
+    const node = makeNode({ id: 'dept-1', metadata: { deptHead: 'emp-head' } })
+    const head = makeEmployee({ id: 'emp-head', name: 'Head Person', photoUrl: null })
+    stubHooks({})
+
+    render(<DepartmentSection node={node} employees={[head]} />)
+
+    expect(screen.getByText('Head Person')).toBeInTheDocument()
+    expect(screen.getAllByTestId('avatar').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+})
+
+// The "AMNEX sales ownership" row (geo/RM/GM chain resolved from
+// node.metadata.salesGeo) looked up its Avatar's photo from the wrong
+// place — hardcoded `photoUrl: undefined` instead of the resolved
+// SalesPerson's own `photoUrl` — while every sibling ownership surface
+// (OwnerBadge, OwnershipBlock, SalesOrgChartCard) already sourced it
+// correctly. This guards that one row specifically.
+describe('DepartmentSection — AMNEX sales ownership avatar', () => {
+  it('renders the resolved owner\'s photo when their SalesPerson record has one', () => {
+    const node = makeNode({ id: 'dept-1', metadata: { salesGeo: 'geo@amnex.com' } })
+    const geoOwner = makeSalesPerson({
+      id: 'sp-geo', name: 'Geo Owner', officialEmail: 'geo@amnex.com',
+      photoUrl: 'data:image/png;base64,AAA=',
+    })
+    stubHooks({})
+    vi.spyOn(api, 'useSalesPersons').mockReturnValue({ data: [geoOwner] } as unknown as ReturnType<typeof api.useSalesPersons>)
+
+    render(<DepartmentSection node={node} employees={[]} />)
+
+    expect(screen.getByText('AMNEX sales ownership')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Geo Owner' })).toHaveAttribute('src', 'data:image/png;base64,AAA=')
+  })
+
+  it('falls back to initials when the resolved owner has no photo', () => {
+    const node = makeNode({ id: 'dept-1', metadata: { salesGeo: 'geo@amnex.com' } })
+    const geoOwner = makeSalesPerson({ id: 'sp-geo', name: 'Geo Owner', officialEmail: 'geo@amnex.com', photoUrl: null })
+    stubHooks({})
+    vi.spyOn(api, 'useSalesPersons').mockReturnValue({ data: [geoOwner] } as unknown as ReturnType<typeof api.useSalesPersons>)
+
+    render(<DepartmentSection node={node} employees={[]} />)
+
+    expect(screen.getByText('AMNEX sales ownership')).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: 'Geo Owner' })).not.toBeInTheDocument()
+  })
+})

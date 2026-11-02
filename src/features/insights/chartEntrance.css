@@ -1,0 +1,88 @@
+/* Load animations for the Insights charts. Every rule is a CSS animation on the element itself, so it
+   plays whenever a chart mounts (opening Insights, switching tabs, data arriving) and costs no JS.
+   Elements stagger through the `--i` index their component sets. `backwards` keeps the start state
+   during the delay; there is no end state, so hover/selection styling is untouched afterwards.
+
+   Every chart has its own speed, set on its frame by three variables:
+     --d  how long one element takes     --s  gap between consecutive elements     --o  delay before the chart starts
+   From fastest to slowest:
+     Pipeline by Department    0.6s
+     Geographic Distribution   0.9s
+     Pipeline by Vertical      1.2s
+     Opportunity Trend         1.5s
+     Opportunity Pipeline by Stage (the main chart)   2.4s
+   The four KPI sparklines are each paced differently too (0.8s, 1.0s, 1.25s, 1.5s, in card order), so the
+   row ripples instead of moving as one.
+   Change a chart's pace by editing its numbers below. */
+@media (prefers-reduced-motion: no-preference) {
+  .insight-frame[aria-label='Pipeline by Department'] { --d: 600ms; --s: 50ms; --o: 0ms; }
+  .insight-frame[aria-label='Geographic Distribution'] { --d: 900ms; --s: 90ms; --o: 150ms; }
+  .insight-frame[aria-label='Pipeline by Vertical'] { --d: 1200ms; --s: 170ms; --o: 200ms; }
+  .insight-frame[aria-label='Opportunity Trend'] { --d: 1500ms; --s: 0ms; --o: 250ms; }
+  .insight-frame[aria-label='Opportunity Pipeline by Stage'] { --d: 2400ms; --s: 220ms; --o: 300ms; }
+
+  @keyframes ins-grow-y { from { transform: scaleY(0); } }
+  @keyframes ins-fade-up { from { opacity: 0; transform: translateY(8px); } }
+  @keyframes ins-fade { from { opacity: 0; } }
+  @keyframes ins-donut-sweep { from { stroke-dasharray: 0 415; } }
+  @keyframes ins-reveal-x { from { clip-path: inset(0 100% 0 0 round 4px); } to { clip-path: inset(0 0 0 0 round 4px); } }
+  @keyframes ins-draw { from { clip-path: inset(-20px 100% -20px -20px); } to { clip-path: inset(-20px -20px -20px -20px); } }
+  @keyframes ins-pop { from { opacity: 0; transform: scale(0.9); } }
+
+  /* KPI sparklines: one pace per card, each a little slower and later than the one before. */
+  .insight-kpi .insight-spark > polygon,
+  .insight-kpi .insight-spark > polyline { animation: ins-draw var(--kd, 1000ms) cubic-bezier(0.4, 0, 0.2, 1) var(--ko, 0ms) backwards; }
+  .insight-kpi:nth-child(1) { --kd: 800ms; --ko: 0ms; }
+  .insight-kpi:nth-child(2) { --kd: 1000ms; --ko: 120ms; }
+  .insight-kpi:nth-child(3) { --kd: 1250ms; --ko: 240ms; }
+  .insight-kpi:nth-child(4) { --kd: 1500ms; --ko: 360ms; }
+  /* Any sparkline outside the KPI row keeps a plain medium pace. */
+  .insight-spark > polygon,
+  .insight-spark > polyline { animation: ins-draw 900ms cubic-bezier(0.4, 0, 0.2, 1) 0ms backwards; }
+
+  /* Stage chart: columns grow up from the baseline one by one; labels settle in last. */
+  .insight-stage-group > g > g {
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    animation: ins-grow-y var(--d, 1000ms) cubic-bezier(0.25, 0.8, 0.25, 1) backwards;
+    animation-delay: calc(var(--i, 0) * var(--s, 100ms) + var(--o, 0ms));
+  }
+  .insight-stage-value-label {
+    animation: ins-fade-up calc(var(--d, 1000ms) * 0.4) cubic-bezier(0.25, 0.8, 0.25, 1) backwards;
+    animation-delay: calc(var(--i, 0) * var(--s, 100ms) + var(--o, 0ms) + var(--d, 1000ms) * 0.7);
+  }
+
+  /* Donut: arcs sweep one after another; the total and legend follow. */
+  .insight-donut-segment circle:not(.insight-hit) {
+    animation: ins-donut-sweep var(--d, 1000ms) cubic-bezier(0.25, 0.8, 0.25, 1) backwards;
+    animation-delay: calc(var(--i, 0) * var(--s, 100ms) + var(--o, 0ms));
+  }
+  .insight-donut-layout > svg > text { animation: ins-fade calc(var(--d, 1000ms) * 0.5) ease backwards; animation-delay: calc(var(--d, 1000ms) * 0.5); }
+  .insight-donut-legend button {
+    animation: ins-fade-up calc(var(--d, 1000ms) * 0.4) cubic-bezier(0.25, 0.8, 0.25, 1) backwards;
+    animation-delay: calc(var(--i, 0) * var(--s, 100ms) * 0.5 + var(--d, 1000ms) * 0.3);
+  }
+
+  /* Horizontal bars (departments, states) fill from the left in turn. */
+  .insight-bar-track > span {
+    animation: ins-reveal-x var(--d, 1000ms) cubic-bezier(0.25, 0.8, 0.25, 1) backwards;
+    animation-delay: calc(var(--i, 0) * var(--s, 100ms) + var(--o, 0ms));
+  }
+  .insight-bars > button {
+    animation: ins-fade-up calc(var(--d, 1000ms) * 0.5) cubic-bezier(0.25, 0.8, 0.25, 1) backwards;
+    animation-delay: calc(var(--i, 0) * var(--s, 100ms));
+  }
+
+  /* Trend: each series is drawn left to right, one after the other. */
+  g[data-trend-series] { animation: ins-draw var(--d, 1000ms) cubic-bezier(0.4, 0, 0.2, 1) backwards; animation-delay: var(--o, 0ms); }
+  g[data-trend-series='won'] { animation-delay: calc(var(--o, 0ms) + var(--d, 1000ms) * 0.2); }
+  g[data-trend-series='lost'] { animation-delay: calc(var(--o, 0ms) + var(--d, 1000ms) * 0.4); }
+
+  /* Map: states pop in a few at a time, at the Geographic frame's pace. */
+  .insight-india path {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: ins-pop var(--d, 1000ms) cubic-bezier(0.25, 0.8, 0.25, 1) backwards;
+    animation-delay: calc(var(--i, 0) * 18ms + var(--o, 0ms));
+  }
+}

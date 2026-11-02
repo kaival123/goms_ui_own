@@ -1,0 +1,59 @@
+[
+ {
+  "zip": "RAJASTHAN.zip",
+  "states": [
+   "Rajasthan"
+  ],
+  "rows": 40891,
+  "talukas": 248,
+  "counts": {
+   "code": 214,
+   "name": 29,
+   "fuzzy": 0,
+   "extra": 5
+  },
+  "unknownDistrict": 5923,
+  "extras": [
+   {
+    "stateCode": 8,
+    "districtCode": "110",
+    "district": "Jaipur",
+    "code": "566",
+    "name": "Phulera (Hq.Sambhar)",
+    "villages": 1
+   },
+   {
+    "stateCode": 8,
+    "districtCode": "124",
+    "district": "Dungarpur",
+    "code": "NaN",
+    "name": "Cheekhli",
+    "villages": 550
+   },
+   {
+    "stateCode": 8,
+    "districtCode": "126",
+    "district": "Chittorgarh",
+    "code": "NaN",
+    "name": "Bhoopal Sagar",
+    "villages": 194
+   },
+   {
+    "stateCode": 8,
+    "districtCode": "115",
+    "district": "Barmer",
+    "code": "NaN",
+    "name": "Dhorimanna",
+    "villages": 855
+   },
+   {
+    "stateCode": 8,
+    "districtCode": "115",
+    "district": "Barmer",
+    "code": "581",
+    "name": "Gudha Malani",
+    "villages": 114
+   }
+  ]
+ }
+]

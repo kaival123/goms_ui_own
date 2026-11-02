@@ -1,0 +1,256 @@
+import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { act, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { MultiSelectDropdown, type MultiSelectGroup } from './MultiSelectDropdown'
+import { WORK_COMPONENT_GROUPS } from '@/features/nodes/department-meta'
+
+const GROUPS: MultiSelectGroup[] = [
+  { label: null, options: ['Alpha', 'Bravo'] },
+  { label: 'OEM', options: ['Charlie', 'Delta'] },
+]
+
+beforeEach(() => {
+  localStorage.clear()
+})
+
+describe('MultiSelectDropdown — default behavior (searchable/allowCustomAdd unset)', () => {
+  it('shows the placeholder when nothing is selected and no chips', () => {
+    render(<MultiSelectDropdown value={[]} onChange={() => {}} groups={GROUPS} storageKey="test-default" placeholder="Pick…" />)
+    expect(screen.getByText('Pick…')).toBeInTheDocument()
+  })
+
+  it('trigger click only opens the panel — no search input is rendered, and the "+ Add option" footer is present', async () => {
+    const user = userEvent.setup()
+    render(<MultiSelectDropdown value={[]} onChange={() => {}} groups={GROUPS} storageKey="test-default" />)
+    await user.click(screen.getByRole('button', { name: /pick|select/i }))
+    expect(screen.getAllByRole('checkbox')).toHaveLength(4)
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add option/i })).toBeInTheDocument()
+  })
+
+  it('checking an option calls onChange with the option appended', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<MultiSelectDropdown value={[]} onChange={onChange} groups={GROUPS} storageKey="test-default" />)
+    await user.click(screen.getByRole('button', { name: /select/i }))
+    await user.click(screen.getByRole('checkbox', { name: 'Alpha' }))
+    expect(onChange).toHaveBeenCalledWith(['Alpha'])
+  })
+
+  it('clicking a chip\'s × button calls onChange with the value removed (stopPropagation keeps the trigger closed)', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<MultiSelectDropdown value={['Alpha', 'Bravo']} onChange={onChange} groups={GROUPS} storageKey="test-default" />)
+    await user.click(screen.getByRole('button', { name: /remove alpha/i }))
+    expect(onChange).toHaveBeenCalledWith(['Bravo'])
+    // The trigger's own onClick toggles `open` — a chip removal must not
+    // also open the panel via bubbling.
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+  })
+})
+
+describe('MultiSelectDropdown — WorkFormDialog call-site reference (searchable off)', () => {
+  // NOTE: as of the "enable search in the Component dropdown" change, the
+  // real invocation in src/features/nodes/WorkFormDialog.tsx now passes
+  // `searchable searchPlaceholder="Search components…"` — see the
+  // "WorkFormDialog call-site regression (searchable on)" block below for
+  // the test that mirrors the real call site.
+  //
+  // This block is kept as a reference case for the searchable-unset
+  // behavior (no search input, footer shown, checking still calls
+  // onChange) using the real WORK_COMPONENT_GROUPS data — it no longer
+  // mirrors WorkFormDialog.tsx's actual props.
+  it('with searchable unset: no search input, footer shown, and toggling works', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<MultiSelectDropdown value={[]} onChange={onChange} groups={WORK_COMPONENT_GROUPS} storageKey="work-component" />)
+    await user.click(screen.getByRole('button', { name: /select/i }))
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add option/i })).toBeInTheDocument()
+    const firstOption = WORK_COMPONENT_GROUPS[0].options[0]
+    await user.click(screen.getByRole('checkbox', { name: firstOption }))
+    expect(onChange).toHaveBeenCalledWith([firstOption])
+  })
+})
+
+describe('MultiSelectDropdown — WorkFormDialog call-site regression (searchable on)', () => {
+  // Mirrors the exact real invocation in src/features/nodes/WorkFormDialog.tsx:
+  // <MultiSelectDropdown value={form.component} onChange={...} groups={WORK_COMPONENT_GROUPS}
+  //   storageKey="work-component" searchable searchPlaceholder="Search components…" />
+  it('typing in the search box filters the real WORK_COMPONENT_GROUPS options to matches', async () => {
+    const user = userEvent.setup()
+    render(<MultiSelectDropdown value={[]} onChange={() => {}} groups={WORK_COMPONENT_GROUPS} storageKey="work-component" searchable searchPlaceholder="Search components…" />)
+    await user.click(screen.getByRole('button', { name: /select/i }))
+    expect(screen.getByPlaceholderText('Search components…')).toBeInTheDocument()
+
+    await user.type(screen.getByPlaceholderText('Search components…'), 'ipmp')
+
+    expect(screen.getByRole('checkbox', { name: 'IPMP' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Hardware' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Golden Record' })).not.toBeInTheDocument()
+    // The unlabeled first group has no remaining matches and disappears,
+    // while the "AMNEX products" group (home of IPMP) stays visible.
+    expect(screen.getByText('AMNEX products')).toBeInTheDocument()
+  })
+
+  it('picking a filtered option still calls onChange with that option', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<MultiSelectDropdown value={[]} onChange={onChange} groups={WORK_COMPONENT_GROUPS} storageKey="work-component" searchable searchPlaceholder="Search components…" />)
+    await user.click(screen.getByRole('button', { name: /select/i }))
+    await user.type(screen.getByPlaceholderText('Search components…'), 'ipmp')
+    await user.click(screen.getByRole('checkbox', { name: 'IPMP' }))
+    expect(onChange).toHaveBeenCalledWith(['IPMP'])
+  })
+})
+
+describe('MultiSelectDropdown — searchable', () => {
+  it('renders a search input at the top of the panel when searchable', async () => {
+    const user = userEvent.setup()
+    render(<MultiSelectDropdown value={[]} onChange={() => {}} groups={GROUPS} storageKey="test-search" searchable searchPlaceholder="Find…" />)
+    await user.click(screen.getByRole('button', { name: /select/i }))
+    expect(screen.getByPlaceholderText('Find…')).toBeInTheDocument()
+  })
+
+  it('typing filters the visible checkbox rows by label substring match (case-insensitive), and hides a group header with no remaining matches', async () => {
+    const user = userEvent.setup()
+    render(<MultiSelectDropdown value={[]} onChange={() => {}} groups={GROUPS} storageKey="test-search" searchable searchPlaceholder="Find…" />)
+    await user.click(screen.getByRole('button', { name: /select/i }))
+    expect(screen.getAllByRole('checkbox')).toHaveLength(4)
+
+    await user.type(screen.getByPlaceholderText('Find…'), 'cha')
+
+    expect(screen.getByRole('checkbox', { name: 'Charlie' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Alpha' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Bravo' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: 'Delta' })).not.toBeInTheDocument()
+    // "OEM" header stays because Charlie (its only remaining match) is still visible.
+    expect(screen.getByText('OEM')).toBeInTheDocument()
+  })
+
+  it('hides a group header entirely once none of its options match', async () => {
+    const user = userEvent.setup()
+    render(<MultiSelectDropdown value={[]} onChange={() => {}} groups={GROUPS} storageKey="test-search" searchable searchPlaceholder="Find…" />)
+    await user.click(screen.getByRole('button', { name: /select/i }))
+    await user.type(screen.getByPlaceholderText('Find…'), 'alp')
+    expect(screen.getByRole('checkbox', { name: 'Alpha' })).toBeInTheDocument()
+    expect(screen.queryByText('OEM')).not.toBeInTheDocument()
+  })
+
+  it('typing in the search box never calls onChange — it is a display filter only', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<MultiSelectDropdown value={['Alpha']} onChange={onChange} groups={GROUPS} storageKey="test-search" searchable searchPlaceholder="Find…" />)
+    // Disambiguate from the chip's own "Remove Alpha" button — only the
+    // trigger carries aria-expanded.
+    await user.click(screen.getByRole('button', { name: /alpha/i, expanded: false }))
+    await user.type(screen.getByPlaceholderText('Find…'), 'bravo')
+    expect(onChange).not.toHaveBeenCalled()
+    // value is untouched — Alpha's chip is still rendered on the trigger.
+    expect(screen.getByText('Alpha')).toBeInTheDocument()
+  })
+
+  it('checking a filtered row still calls onChange normally', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(<MultiSelectDropdown value={[]} onChange={onChange} groups={GROUPS} storageKey="test-search" searchable searchPlaceholder="Find…" />)
+    await user.click(screen.getByRole('button', { name: /select/i }))
+    await user.type(screen.getByPlaceholderText('Find…'), 'bravo')
+    await user.click(screen.getByRole('checkbox', { name: 'Bravo' }))
+    expect(onChange).toHaveBeenCalledWith(['Bravo'])
+  })
+})
+
+// Root-caused 2026-09-03: reproduced live (Playwright, both a local dev
+// build and the real goms-dev production site) that opening/toggling the
+// trigger with 2+ chips selected can fire a second, independently-trusted
+// native 'click' — sharing the exact same `timeStamp` as the click that
+// opened the trigger — targeting a chip's "Remove" button, even though that
+// button's on-screen position never overlapped the actual click coordinates.
+// The fix records the trigger-click's native timeStamp and ignores a
+// remove-click carrying that same timeStamp. jsdom/userEvent can't reproduce
+// the browser-level duplicate dispatch itself, so this test drives the fix's
+// actual guard directly: two native 'click' events forced to share one
+// timeStamp (one on the trigger, one on a chip's × button) must not mutate
+// the selection, while a normal, separately-timestamped click on × still
+// removes that chip.
+function clickWithTimeStamp(el: Element, timeStamp: number) {
+  const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'timeStamp', { value: timeStamp })
+  act(() => { el.dispatchEvent(event) })
+}
+
+describe('MultiSelectDropdown — opening must never mutate the selection (regression)', () => {
+  it('a chip-removal click sharing the trigger-open click\'s exact timeStamp is ignored', () => {
+    const onChange = vi.fn()
+    render(
+      <MultiSelectDropdown
+        value={['Alpha', 'Bravo', 'Charlie']}
+        onChange={onChange}
+        groups={GROUPS}
+        storageKey="test-phantom-click"
+      />,
+    )
+    const trigger = screen.getByRole('button', { name: /alpha/i, expanded: false })
+    const removeAlpha = screen.getByRole('button', { name: /remove alpha/i })
+
+    clickWithTimeStamp(trigger, 1000)
+    clickWithTimeStamp(removeAlpha, 1000)
+
+    expect(onChange).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /remove alpha/i })).toBeInTheDocument()
+  })
+
+  it('a genuinely separate click on × (different timeStamp) still removes the chip', () => {
+    const onChange = vi.fn()
+    render(
+      <MultiSelectDropdown
+        value={['Alpha', 'Bravo', 'Charlie']}
+        onChange={onChange}
+        groups={GROUPS}
+        storageKey="test-real-remove-click"
+      />,
+    )
+    const trigger = screen.getByRole('button', { name: /alpha/i, expanded: false })
+    const removeAlpha = screen.getByRole('button', { name: /remove alpha/i })
+
+    clickWithTimeStamp(trigger, 1000)
+    clickWithTimeStamp(removeAlpha, 2000)
+
+    expect(onChange).toHaveBeenCalledWith(['Bravo', 'Charlie'])
+  })
+
+  it('opening with multiple selections never calls onChange on its own', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    render(
+      <MultiSelectDropdown
+        value={['Alpha', 'Bravo', 'Charlie']}
+        onChange={onChange}
+        groups={GROUPS}
+        storageKey="test-open-no-mutate"
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /alpha/i, expanded: false }))
+    expect(onChange).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /remove alpha/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /remove bravo/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /remove charlie/i })).toBeInTheDocument()
+  })
+})
+
+describe('MultiSelectDropdown — allowCustomAdd', () => {
+  it('hides the "+ Add option" footer when allowCustomAdd is false', async () => {
+    const user = userEvent.setup()
+    render(<MultiSelectDropdown value={[]} onChange={() => {}} groups={GROUPS} storageKey="test-noadd" allowCustomAdd={false} />)
+    await user.click(screen.getByRole('button', { name: /select/i }))
+    expect(screen.queryByRole('button', { name: /add option/i })).not.toBeInTheDocument()
+  })
+
+  it('still shows the "+ Add option" footer when allowCustomAdd is true or unset', async () => {
+    const user = userEvent.setup()
+    render(<MultiSelectDropdown value={[]} onChange={() => {}} groups={GROUPS} storageKey="test-add-true" allowCustomAdd />)
+    await user.click(screen.getByRole('button', { name: /select/i }))
+    expect(screen.getByRole('button', { name: /add option/i })).toBeInTheDocument()
+  })
+})

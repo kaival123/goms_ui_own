@@ -1,0 +1,84 @@
+import { useRef, useState, type ReactNode } from 'react'
+import { motion } from 'framer-motion'
+import { Icon } from '@/components/ui/Icon'
+import { PopoverPanel } from '@/components/ui/popover/PopoverPanel'
+import { cn } from '@/lib/utils'
+
+function Item({ icon, children, onClick, disabled }: {
+  icon: string; children: ReactNode; onClick: () => void; disabled?: boolean
+}) {
+  return (
+    <button
+      type="button" role="menuitem" disabled={disabled} onClick={onClick}
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-ink hover:bg-goms-sky/[0.14] disabled:pointer-events-none disabled:opacity-40"
+    >
+      <Icon name={icon} size={14} className="shrink-0" /> {children}
+    </button>
+  )
+}
+
+/** The per-column menu in a grid header: quick actions for THIS column — sort,
+ *  filter, freeze. Moving,
+ *  hiding, renaming and archiving live only in that panel, so each action has
+ *  exactly one home. */
+export function ColumnHeaderMenu({ header, sorted, canSort, onSort, onFilter, frozen, freezeBlockedReason, onToggleFreeze, onAutoFit, onChangeType }: {
+  header: string
+  sorted: false | 'asc' | 'desc'
+  canSort: boolean
+  onSort: (dir: 'asc' | 'desc' | false) => void
+  onFilter: (() => void) | null
+  /** Frozen columns stay put while the sheet scrolls sideways. Null = not freezable (the actions column). */
+  frozen: boolean
+  /** Set when freezing is unavailable right now (no room left), with why. */
+  freezeBlockedReason?: string | null
+  onToggleFreeze: (() => void) | null
+  onAutoFit?: () => void
+  onChangeType?: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const run = (fn: () => void) => () => { setOpen(false); fn() }
+  return (
+    <div ref={anchorRef} className="relative shrink-0">
+      <button
+        type="button" aria-label={`${header} column menu`} aria-haspopup="menu" aria-expanded={open}
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
+        className={cn(
+          'flex h-5 w-5 items-center justify-center rounded text-muted hover:bg-goms-navy/[0.1] hover:text-goms-navy focus-visible:focus-ring',
+          open ? 'opacity-100' : 'opacity-0 group-hover/th:opacity-100 focus-visible:opacity-100',
+        )}
+      >
+        <Icon name="ChevronDown" size={13} />
+      </button>
+      <PopoverPanel open={open} anchorRef={anchorRef} onClose={() => setOpen(false)} align="end" maxPanelHeight={360}>
+        {({ maxHeight }) => (
+          <motion.div
+            data-canvas-ui role="menu" aria-label={`${header} column`}
+            initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.1 }}
+            style={{ maxHeight }} className="w-52 overflow-y-auto rounded-xl border border-line bg-paper p-1 shadow-pop"
+          >
+            {canSort && (
+              <>
+                <Item icon="ArrowUp" disabled={sorted === 'asc'} onClick={run(() => onSort('asc'))}>Sort ascending</Item>
+                <Item icon="ArrowDown" disabled={sorted === 'desc'} onClick={run(() => onSort('desc'))}>Sort descending</Item>
+                {sorted && <Item icon="RotateCcw" onClick={run(() => onSort(false))}>Clear sort</Item>}
+              </>
+            )}
+            {onFilter && <Item icon="SlidersHorizontal" onClick={run(onFilter)}>Filter by this column</Item>}
+            {onAutoFit && <Item icon="ArrowLeftRight" onClick={run(onAutoFit)}>Auto-fit column</Item>}
+            {onChangeType && <Item icon="Type" onClick={run(onChangeType)}>Change data type…</Item>}
+            {onToggleFreeze && (
+              <Item
+                icon={frozen ? "PinOff" : "Pin"} disabled={!frozen && !!freezeBlockedReason}
+                onClick={run(onToggleFreeze)}
+              >
+                {frozen ? "Unfreeze column" : "Freeze column"}
+              </Item>
+            )}
+            {!frozen && freezeBlockedReason && <p className="px-2 pb-1 text-[11px] text-muted">{freezeBlockedReason}</p>}
+          </motion.div>
+        )}
+      </PopoverPanel>
+    </div>
+  )
+}

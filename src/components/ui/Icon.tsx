@@ -1,0 +1,39 @@
+import {
+  Paperclip, Reply, ReplyAll, Forward, Inbox, MailOpen, RefreshCw, FileImage, FileArchive,
+  Target, Trophy, BriefcaseBusiness, Cloud, WifiOff,
+  Folder, Video, Languages, PanelsTopLeft, BookOpen, KeyRound, Globe, Landmark, MapPin, Map, Home, Building2, GitBranch, Layers, DoorOpen, Boxes,
+  Search, Plus, Pencil, Trash2, Archive, ArchiveRestore, Copy, ChevronRight, ChevronLeft, ChevronDown, ChevronUp,
+  X, Upload, Download, Users, User, Mail, Phone, ExternalLink, ArrowLeft, Command, CornerDownLeft,
+  Network, MoreHorizontal, Check, Hash, Building, FileSpreadsheet, Sparkles, MoveRight,
+  Maximize, ChevronsDown, ChevronsUp, Eye, EyeOff, Keyboard, Camera, IdCard, UserPlus, Calendar,
+  MessageCircle, PhoneCall, Clock, FileText, StickyNote, TrendingUp, ArrowLeftRight, Star,
+  GripVertical, BarChart3, PieChart, UserX, UserCheck, Briefcase, Handshake, CalendarClock,
+  Circle, CircleDot, CircleAlert, Link2, Send, Flag, ArrowUp, ArrowDown, Type, Menu, List, SlidersHorizontal,
+  RotateCcw, Loader2, GitMerge, Calculator, Lock, Unlock, Printer, Settings, TriangleAlert, Database,
+  LogIn, LogOut, ChevronsUpDown, ArrowRight, Brackets, Pin, PinOff, ShieldCheck, History, Sun, Moon, Monitor, Palette,
+  Lightbulb, ClipboardCheck, MessageSquareText, CalendarDays, EllipsisVertical, CircleCheck, Diamond,
+  FilePenLine, Presentation, FileUp, ArrowDownUp, LayoutGrid, Rows3, ServerOff, ShieldAlert, Bookmark, Maximize2, Minimize2, FilterX, Save, CalendarPlus, Tag, Megaphone, Wallet, Receipt,
+  type LucideIcon,
+} from 'lucide-react'
+
+const REGISTRY: Record<string, LucideIcon> = {
+  Paperclip, Reply, ReplyAll, Forward, Inbox, MailOpen, RefreshCw, FileImage, FileArchive,
+  Target, Trophy, BriefcaseBusiness, Cloud, WifiOff,
+  FilePenLine, Presentation, FileUp, ArrowDownUp, LayoutGrid, Rows3, ServerOff, ShieldAlert, Bookmark, Maximize2, Minimize2, FilterX, Save, CalendarPlus, Tag, Megaphone, Wallet, Receipt,
+  Lightbulb, ClipboardCheck, MessageSquareText, CalendarDays, EllipsisVertical, CircleCheck, Diamond,
+  Folder, Video, Languages, PanelsTopLeft, BookOpen, KeyRound, Globe, Landmark, MapPin, Map, Home, Building2, GitBranch, Layers, DoorOpen, Boxes,
+  Search, Plus, Pencil, Trash2, Archive, ArchiveRestore, Copy, ChevronRight, ChevronLeft, ChevronDown, ChevronUp,
+  X, Upload, Download, Users, User, Mail, Phone, ExternalLink, ArrowLeft, Command, CornerDownLeft,
+  Network, MoreHorizontal, Check, Hash, Building, FileSpreadsheet, Sparkles, MoveRight,
+  Maximize, ChevronsDown, ChevronsUp, Eye, EyeOff, Keyboard, Camera, IdCard, UserPlus, Calendar,
+  MessageCircle, PhoneCall, Clock, FileText, StickyNote, TrendingUp, ArrowLeftRight, Star,
+  GripVertical, BarChart3, PieChart, UserX, UserCheck, Briefcase, Handshake, CalendarClock,
+  Circle, CircleDot, CircleAlert, Link2, Send, Flag, ArrowUp, ArrowDown, Type, Menu, List, SlidersHorizontal,
+  RotateCcw, Loader: Loader2, GitMerge, Calculator, Lock, Unlock, Printer, Settings, TriangleAlert, Database,
+  LogIn, LogOut, ChevronsUpDown, ArrowRight, Brackets, Pin, PinOff, ShieldCheck, History, Sun, Moon, Monitor, Palette,
+}
+
+export function Icon({ name, className, size = 16, strokeWidth = 1.9 }: { name: string; className?: string; size?: number; strokeWidth?: number }) {
+  const Cmp = REGISTRY[name] ?? Hash
+  return <Cmp className={className} size={size} strokeWidth={strokeWidth} aria-hidden />
+}

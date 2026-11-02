@@ -1,0 +1,45 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
+import { AuthStatus } from './AuthStatus'
+
+const firebase = vi.hoisted(() => ({ onAuthStateChanged: vi.fn(), signOut: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('firebase/auth', () => firebase)
+afterEach(cleanup)
+beforeEach(() => {
+  firebase.onAuthStateChanged.mockImplementation((_auth, callback) => {
+    callback({ email: 'user@example.com', displayName: 'Signed-in user', photoURL: null })
+    return () => {}
+  })
+})
+describe('Profile options navigation', () => {
+  it.each(['Shubham Mehra', 'Asha Rao'])('puts every gear option under the profile for %s', async (name) => {
+    firebase.onAuthStateChanged.mockImplementation((_auth, callback) => {
+      callback({ email: 'user@example.com', displayName: name, photoURL: null })
+      return () => {}
+    })
+    render(<MemoryRouter><AuthStatus /></MemoryRouter>)
+    expect(screen.getByRole('button', { name: 'Profile options' })).toHaveTextContent(name)
+    expect(screen.queryByRole('button', { name: 'Options' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Profile options' }))
+    expect(screen.getByRole('menuitem', { name: 'Sign out' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitemcheckbox', { name: /Day mode|Night mode/ })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('menuitem', { name: /Settings/ }))
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'System settings' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Bid team settings' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Pre-sales' })).toBeInTheDocument()
+  })
+  it('offers Settings and Sign in through the blank user pill when signed out', async () => {
+    firebase.onAuthStateChanged.mockImplementation((_auth, callback) => { callback(null); return () => {} })
+    render(<MemoryRouter><AuthStatus /></MemoryRouter>)
+    expect(screen.getByRole('button', { name: 'Profile options' })).toHaveTextContent('User')
+    await userEvent.click(screen.getByRole('button', { name: 'Profile options' }))
+    expect(screen.getByRole('menuitem', { name: 'Sign in' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('menuitem', { name: /Settings/ }))
+    expect(screen.getByRole('button', { name: 'System settings' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Bid team settings' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Pre-sales' })).toBeInTheDocument()
+  })
+})
