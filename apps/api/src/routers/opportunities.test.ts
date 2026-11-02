@@ -1,0 +1,198 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { appRouter } from '../index.js'
+import { pool } from '../db.js'
+import { contextForEmail } from '../testHelpers/authTestHelpers.js'
+
+describe('opportunities router', () => {
+  let departmentId: string
+
+  beforeEach(async () => {
+    await pool.query('DELETE FROM opportunity_stage_changes')
+    await pool.query('DELETE FROM bid_milestones')
+    await pool.query('DELETE FROM bids')
+    await pool.query('DELETE FROM opportunities')
+    // Other test files (sharing this DB, fileParallelism off) may leave
+    // employee rows behind, which would otherwise block deleting
+    // hierarchy_nodes below via employees.org_node_id's RESTRICT FK. Same
+    // reasoning for commercial_boqs.department_id (2026-08-26 hardening
+    // pass added a sales.test.ts case that leaves one behind).
+    await pool.query('DELETE FROM commercial_boq_line_items')
+    await pool.query('DELETE FROM commercial_boqs')
+    await pool.query('DELETE FROM employees')
+    await pool.query('DELETE FROM hierarchy_nodes')
+    const caller = appRouter.createCaller({})
+    departmentId = (await caller.hierarchy.createNode({
+      domain: 'org', typeKey: 'department', parentId: null, stateCode: 27, name: 'Dept',
+    })).id
+  })
+
+  it('creates an opportunity defaulting to the pipeline stage and logs an opening stage change', async () => {
+    const caller = appRouter.createCaller({})
+    const opp = await caller.opportunities.create({ departmentId, opportunityName: 'GEM tender A' })
+    expect(opp.stageKey).toBe('pipeline')
+    expect(opp.closedOn).toBeNull()
+    expect(opp.stateCode).toBe(27)
+    expect(opp.currency).toBe('INR')
+    expect(opp.valueUnit).toBe('lakh')
+    const changes = await caller.opportunities.listStageChanges({ opportunityId: opp.id })
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toMatchObject({ fromStageKey: null, toStageKey: 'pipeline', note: 'Opportunity created' })
+  })
+
+  it('lists newest-created first, tie-broken by name', async () => {
+    const caller = appRouter.createCaller({})
+    await caller.opportunities.create({ departmentId, opportunityName: 'Zebra' })
+    await caller.opportunities.create({ departmentId, opportunityName: 'Alpha' })
+    const list = await caller.opportunities.list()
+    // Both created "today" so createdAt ties — tie-break is name, descending
+    // per the in-memory sort (`b.createdAt.localeCompare(a.createdAt) ||
+    // a.opportunityName.localeCompare(b.opportunityName)`).
+    expect(list.map((o) => o.opportunityName)).toEqual(['Alpha', 'Zebra'])
+  })
+
+  it('logs a stage change and derives closedOn when the stage moves to a closed stage, and clears it moving back to open', async () => {
+    const caller = appRouter.createCaller({})
+    const opp = await caller.opportunities.create({ departmentId, opportunityName: 'Deal' })
+    const won = await caller.opportunities.update({ id: opp.id, patch: { stageKey: 'won' } })
+    expect(won.closedOn).not.toBeNull()
+    const changes = await caller.opportunities.listStageChanges({ opportunityId: opp.id })
+    expect(changes.map((c) => c.toStageKey)).toEqual(['pipeline', 'won'])
+
+    const reopened = await caller.opportunities.update({ id: opp.id, patch: { stageKey: 'qualified' } })
+    expect(reopened.closedOn).toBeNull()
+  })
+
+  it('does not log a stage change or touch closedOn for a non-stage patch', async () => {
+    const caller = appRouter.createCaller({})
+    const opp = await caller.opportunities.create({ departmentId, opportunityName: 'Deal' })
+    await caller.opportunities.update({ id: opp.id, patch: { vertical: 'Smart Cities' } })
+    const changes = await caller.opportunities.listStageChanges({ opportunityId: opp.id })
+    expect(changes).toHaveLength(1) // only the opening row
+    const updated = await caller.opportunities.get({ id: opp.id })
+    expect(updated?.vertical).toBe('Smart Cities')
+    expect(updated?.closedOn).toBeNull()
+  })
+
+  it('cascades stage changes when an opportunity is deleted', async () => {
+    const caller = appRouter.createCaller({})
+    const opp = await caller.opportunities.create({ departmentId, opportunityName: 'Deal' })
+    await caller.opportunities.delete({ id: opp.id })
+    expect(await caller.opportunities.get({ id: opp.id })).toBeNull()
+    expect(await caller.opportunities.listStageChanges({ opportunityId: opp.id })).toEqual([])
+  })
+
+  it('cascades opportunities (and their stage changes) when the owning department node is deleted', async () => {
+    const caller = appRouter.createCaller({})
+    const opp = await caller.opportunities.create({ departmentId, opportunityName: 'Deal' })
+    await caller.hierarchy.deleteNode({ id: departmentId })
+    expect(await caller.opportunities.get({ id: opp.id })).toBeNull()
+    expect(await caller.opportunities.listStageChanges({ opportunityId: opp.id })).toEqual([])
+  })
+
+  it('scopes listByDepartment to one department, name-sorted', async () => {
+    const caller = appRouter.createCaller({})
+    const otherDept = (await caller.hierarchy.createNode({
+      domain: 'org', typeKey: 'department', parentId: null, stateCode: 9, name: 'Other Dept',
+    })).id
+    await caller.opportunities.create({ departmentId, opportunityName: 'B' })
+    await caller.opportunities.create({ departmentId, opportunityName: 'A' })
+    await caller.opportunities.create({ departmentId: otherDept, opportunityName: 'C' })
+    const list = await caller.opportunities.listByDepartment({ departmentId })
+    expect(list.map((o) => o.opportunityName)).toEqual(['A', 'B'])
+  })
+
+  describe('auth enforcement', () => {
+    afterEach(() => {
+      delete process.env.AUTH_ENFORCEMENT_ENABLED
+    })
+
+    it('still allows an unauthenticated caller when enforcement is off (existing behavior)', async () => {
+      const caller = appRouter.createCaller({})
+      await expect(caller.opportunities.create({ departmentId, opportunityName: 'GEM tender A' })).resolves.toBeDefined()
+    })
+
+    it('rejects an unauthenticated mutation once enforcement is on', async () => {
+      process.env.AUTH_ENFORCEMENT_ENABLED = 'true'
+      const caller = appRouter.createCaller({})
+      await expect(
+        caller.opportunities.create({ departmentId, opportunityName: 'GEM tender A' }),
+      ).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
+    })
+
+    it('still allows reads with no auth even when enforcement is on', async () => {
+      process.env.AUTH_ENFORCEMENT_ENABLED = 'true'
+      const caller = appRouter.createCaller({})
+      await expect(caller.opportunities.list()).resolves.toBeDefined()
+    })
+
+    it('allows the same mutation once enforcement is on, for a verified @amnex.com caller', async () => {
+      process.env.AUTH_ENFORCEMENT_ENABLED = 'true'
+      const caller = appRouter.createCaller(contextForEmail('someone@amnex.com'))
+      await expect(
+        caller.opportunities.create({ departmentId, opportunityName: 'GEM tender A' }),
+      ).resolves.toBeDefined()
+    })
+  })
+
+  describe('read protection (READ_AUTH_ENFORCEMENT_ENABLED)', () => {
+    afterEach(() => {
+      delete process.env.READ_AUTH_ENFORCEMENT_ENABLED
+    })
+
+    it('still allows an unauthenticated read when the flag is unset (deliberate no-op default)', async () => {
+      const caller = appRouter.createCaller({})
+      await expect(caller.opportunities.list()).resolves.toBeDefined()
+    })
+
+    it('rejects an unauthenticated read once the flag is on', async () => {
+      process.env.READ_AUTH_ENFORCEMENT_ENABLED = 'true'
+      const caller = appRouter.createCaller({})
+      await expect(caller.opportunities.list()).rejects.toMatchObject({ code: 'UNAUTHORIZED' })
+    })
+
+    it('rejects a non-Amnex identity once the flag is on', async () => {
+      process.env.READ_AUTH_ENFORCEMENT_ENABLED = 'true'
+      const caller = appRouter.createCaller(contextForEmail('someone@gmail.com'))
+      await expect(caller.opportunities.list()).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    })
+
+    it('allows a verified @amnex.com identity once the flag is on', async () => {
+      process.env.READ_AUTH_ENFORCEMENT_ENABLED = 'true'
+      const caller = appRouter.createCaller(contextForEmail('someone@amnex.com'))
+      await expect(caller.opportunities.list()).resolves.toBeDefined()
+    })
+  })
+
+  it('rejects a submissionDate patch once a bid exists for the opportunity, but allows it before one exists', async () => {
+    const caller = appRouter.createCaller({})
+    const opp = await caller.opportunities.create({ departmentId, opportunityName: 'Deal', submissionDate: '2026-10-10' })
+    await caller.opportunities.update({ id: opp.id, patch: { submissionDate: '2026-10-15' } }) // still allowed, no bid yet
+    await caller.bids.create({ opportunityId: opp.id })
+    await expect(
+      caller.opportunities.update({ id: opp.id, patch: { submissionDate: '2026-10-20' } })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
+  it('rejects a stageKey patch once a bid exists for the opportunity, but allows it before one exists (Global Constraint: opportunities.stage_key has no direct-write path once a bid exists)', async () => {
+    const caller = appRouter.createCaller({})
+    const opp = await caller.opportunities.create({ departmentId, opportunityName: 'Deal' })
+    await caller.opportunities.update({ id: opp.id, patch: { stageKey: 'qualified' } }) // still allowed, no bid yet
+    await caller.bids.create({ opportunityId: opp.id })
+    await expect(
+      caller.opportunities.update({ id: opp.id, patch: { stageKey: 'won' } })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' })
+  })
+
+  it('translates a RESTRICT violation from a referencing bid into a friendly CONFLICT on delete', async () => {
+    const caller = appRouter.createCaller({})
+    const opp = await caller.opportunities.create({ departmentId, opportunityName: 'Deal' })
+    await caller.bids.create({ opportunityId: opp.id })
+    await expect(caller.opportunities.delete({ id: opp.id })).rejects.toMatchObject({ code: 'CONFLICT' })
+
+    // Archiving does NOT unblock the delete (spec §4.7 — corrected from an
+    // earlier draft that said it would).
+    const bid = (await caller.bids.listForGrid({})).find((b: any) => b.opportunityId === opp.id)!
+    await caller.bids.archive({ id: bid.id })
+    await expect(caller.opportunities.delete({ id: opp.id })).rejects.toMatchObject({ code: 'CONFLICT' })
+  })
+})

@@ -1,0 +1,131 @@
+apply plugin: 'com.android.application'
+
+// --- Release signing (internal/sideload distribution) -----------------------
+// Reads keystore location/passwords from Gradle properties, never from
+// hardcoded literals in this file. Properties can come from either:
+//   1. android/keystore.properties (git-ignored local file), or
+//   2. -P/gradle.properties/environment-style Gradle project properties
+//      (e.g. `ORG_GRADLE_PROJECT_MYAPP_RELEASE_STORE_PASSWORD=...`).
+// See android/README.md for full setup instructions.
+//
+// If the properties are absent, `signingProps` stays empty and the
+// `release` build type below falls back to the default (unsigned) signing
+// config, so `assembleRelease` still succeeds for anyone who hasn't set up
+// signing — it just won't be installable until it's signed some other way.
+def signingProps = new Properties()
+def keystorePropsFile = rootProject.file('keystore.properties')
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { signingProps.load(it) }
+}
+
+def signingPropOrEnv = { String propName, String envName ->
+    if (signingProps.containsKey(propName)) return signingProps[propName]
+    if (project.hasProperty(propName)) return project.property(propName)
+    def envVal = System.getenv(envName)
+    if (envVal != null) return envVal
+    return null
+}
+
+def releaseStoreFile = signingPropOrEnv('MYAPP_RELEASE_STORE_FILE', 'MYAPP_RELEASE_STORE_FILE')
+def releaseStorePassword = signingPropOrEnv('MYAPP_RELEASE_STORE_PASSWORD', 'MYAPP_RELEASE_STORE_PASSWORD')
+def releaseKeyAlias = signingPropOrEnv('MYAPP_RELEASE_KEY_ALIAS', 'MYAPP_RELEASE_KEY_ALIAS')
+def releaseKeyPassword = signingPropOrEnv('MYAPP_RELEASE_KEY_PASSWORD', 'MYAPP_RELEASE_KEY_PASSWORD')
+
+def hasReleaseSigningConfig = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+
+// Loudly warn on a PARTIAL config (some but not all four properties set) --
+// this is almost always a typo/omission (e.g. keystore + passwords set but
+// the key alias forgotten), and without this warning it silently produces
+// an unsigned "release" APK with no diagnostic at all. A fully-absent
+// config (the expected default/dev case) intentionally stays silent.
+def releaseSigningPropsSet = [releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword]
+def releaseSigningPropsPresentCount = releaseSigningPropsSet.count { it }
+if (releaseSigningPropsPresentCount > 0 && !hasReleaseSigningConfig) {
+    def missing = []
+    if (!releaseStoreFile) missing << 'MYAPP_RELEASE_STORE_FILE'
+    if (!releaseStorePassword) missing << 'MYAPP_RELEASE_STORE_PASSWORD'
+    if (!releaseKeyAlias) missing << 'MYAPP_RELEASE_KEY_ALIAS'
+    if (!releaseKeyPassword) missing << 'MYAPP_RELEASE_KEY_PASSWORD'
+    logger.warn(
+        "WARNING: Partial release-signing configuration detected " +
+        "(${releaseSigningPropsPresentCount}/4 of the MYAPP_RELEASE_* signing " +
+        "properties are set). Missing: ${missing.join(', ')}. All four " +
+        "properties (store file, store password, key alias, key password) " +
+        "must be set together for the release build to be signed - " +
+        "assembleRelease/bundleRelease will still succeed, but will silently " +
+        "produce an UNSIGNED release artifact. See android/README.md for setup."
+    )
+}
+// ------------------------------------------------------------------------
+
+android {
+    namespace = "com.gorms.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.gorms.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+             // `!*.gz:!*.br` added for the vite-plugin-compression2 build output (see vite.config.ts):
+             // AAPT normalizes "foo.js.gz"/"foo.js.br" to the same resource path as "foo.js", so
+             // without this the pre-compressed siblings collide with their originals as "Duplicate
+             // resources". The WebView never negotiates content-encoding locally, so these
+             // GitLab-Pages-only siblings are unneeded (and unused) inside the native app anyway.
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:!*.gz:!*.br'
+        }
+    }
+    signingConfigs {
+        if (hasReleaseSigningConfig) {
+            release {
+                storeFile rootProject.file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+    buildTypes {
+        release {
+            // Falls back to the default (unsigned) signing when the
+            // properties above aren't set, so this build type never
+            // hard-fails just because signing hasn't been configured yet.
+            signingConfig hasReleaseSigningConfig ? signingConfigs.release : null
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

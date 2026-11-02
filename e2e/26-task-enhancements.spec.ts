@@ -1,0 +1,710 @@
+import { test, expect, Page } from '@playwright/test';
+
+/**
+ * GOMS 26-Task Enhancement Verification Suite
+ *
+ * Rewritten against the real app (src/app/router.tsx) and real seed data on
+ * goms-dev, not assumed routes/testids. Fixtures used throughout:
+ *  - /directory: 2 employees — Priya Nair (QA Analyst) and Vikram Rao
+ *    (Senior QA Manager, Priya's reporting manager), both under the
+ *    "QA Test" department.
+ *  - /state/0 (Central Ministries): 6 departments including "QA Test",
+ *    which has 1 seeded meeting and 0 opportunities.
+ *  - /sales/roster: 30 real sales people (e.g. "Jayendrasinh Puwar").
+ *
+ * AUTH LIMITATION — read before triaging any failure here: this suite runs
+ * against goms-dev fully signed out (no Firebase session), and the API has
+ * `AUTH_ENFORCEMENT_ENABLED=true`, so every protected write (Create
+ * department, Save changes, Add meeting, Add employee, attendee add/remove,
+ * etc.) is rejected server-side. The client-side symptom is never a clean
+ * error — it's the dialog/button just never completing (a "toBeVisible" on
+ * post-save content timing out, or a click on "Edit"/"Save changes" timing
+ * out because the create dialog never closed). As of 2026-09-08 this is a
+ * known, reproducible split: 32 passed / 8 failed, and all 8 failures are
+ * exactly the write-dependent flows above — not product regressions. Do NOT
+ * "fix" these by weakening assertions, adding optimistic UI checks that pass
+ * without a successful mutation, or touching AUTH_ENFORCEMENT_ENABLED. A
+ * genuine product regression in one of these flows can only be confirmed by
+ * running this suite with a real signed-in Firebase session (not yet wired
+ * into this suite/CI), or by manual click-through against goms-dev/goms-prod
+ * while signed in.
+ *
+ * Run with: npx playwright test
+ * Run specific test: npx playwright test -g "ownership"
+ */
+
+async function openQaTestDepartment(page: Page) {
+  await page.goto('/state/0', { waitUntil: 'networkidle' });
+  const listBtn = page.getByRole('button', { name: 'list', exact: true });
+  await listBtn.click();
+  await page.getByText('QA Test', { exact: true }).click();
+}
+
+async function unlockSalesEditing(page: Page) {
+  // Wait for the toggle to render in either state first: an immediate count() raced the
+  // roster's first paint on slower runners, saw nothing, and left editing locked.
+  const toggle = page.getByRole('button', { name: /Sales team editing (locked|unlocked)/ });
+  await expect(toggle).toBeVisible();
+  if (await toggle.getAttribute('aria-pressed') !== 'true') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+}
+
+/** Opens the FAB's "Create Department" flow, picks a real state (never
+ *  Central Ministries), and leaves the create-department dialog open with
+ *  "Full name" filled. Needed for the State/District/City/STD contact
+ *  fields specifically: DepartmentFields.tsx (commit 70bd1220, 2026-09-03)
+ *  deliberately hides that whole block for a Central Ministries department
+ *  ("they don't apply to a jurisdiction that isn't a real state") -- these
+ *  tests used to edit the suite's "QA Test" fixture for this, but QA Test
+ *  lives under Central Ministries (/state/0), so that flow is no longer
+ *  reachable there at all. Root-caused 2026-09-03: not a regression in this
+ *  flow itself, just a stale fixture choice -- a throwaway department under
+ *  a real state exercises the actual supported case instead. */
+async function createDepartmentUnderState(page: Page, stateName: string, deptName: string) {
+  await page.goto('/directory', { waitUntil: 'networkidle' });
+  await page.getByRole('button', { name: 'Create new' }).click();
+  await page.getByRole('menuitem', { name: 'Create Department' }).click();
+  await page.getByRole('button', { name: 'Choose a State' }).click();
+  await pickCombobox(page, page.getByRole('dialog').getByRole('combobox', { name: 'State' }), stateName);
+  await page.getByRole('button', { name: 'Continue' }).click();
+  // Scoped to this specific dialog, not just getByLabel('State') on the page:
+  // StatePicker's own state-search Combobox also carries aria-label="State"
+  // (StatePicker.tsx), and its Dialog can still be present (mid exit-
+  // animation) in the accessibility tree for a moment after Continue closes
+  // it -- an unscoped query strict-mode-violates against a stale second
+  // match. "New department" is this dialog's own distinct title.
+  const dialog = page.getByRole('dialog', { name: 'New department' });
+  await dialog.getByLabel('Full name').fill(deptName);
+  return dialog;
+}
+
+/** Locates a `Field`'s wrapping <label> by its visible label text. `Field`
+ *  (src/components/ui/Field.tsx) wraps label text + control in one <label>,
+ *  so getByLabel() only works for native inputs/selects — Combobox and
+ *  MultiSelectDropdown are non-native controls (a role="combobox" input with
+ *  its OWN aria-label, or a role="button" div) that need scoping through
+ *  this wrapper instead. */
+function fieldByLabel(page: Page, labelText: string) {
+  return page.locator('label', { hasText: labelText });
+}
+
+/** Opens a Combobox (src/components/ui/Combobox.tsx) and picks the first
+ *  filtered match. Options must be scoped to role="listbox" — a bare
+ *  getByRole('option') also matches native <select> <option> elements
+ *  elsewhere on the page, which are inert until their <select> is opened and
+ *  fail Playwright's actionability check. */
+async function pickCombobox(page: Page, combobox: import('@playwright/test').Locator, query: string) {
+  await combobox.click();
+  await combobox.fill(query);
+  await page.getByRole('listbox').getByRole('option').first().click();
+}
+
+// /directory (Directory.tsx) mounts EmployeeDetails twice simultaneously —
+// once inside the always-present desktop <aside>, once inside
+// MobileDetailsSheet (a plain motion.div, CSS-hidden at the Desktop Chrome
+// viewport via `lg:hidden`, but still real DOM/accessibility-tree content).
+// <aside> is the one landmark unique to the desktop copy, so scoping through
+// it (rather than .first(), which depends on DOM/mount-order luck) reliably
+// avoids the resulting strict-mode duplicate-match errors.
+function desktopPanel(page: Page) {
+  return page.locator('aside');
+}
+
+// ============================================================================
+// ACCOUNT MAPPING TESTS
+// ============================================================================
+
+test.describe('Account Mapping — Ownership Auto-Reflect', () => {
+  test('Phase 1.1–1.2: Employee edit with Relationship Owner change auto-reflects to AMNEX ownership', async ({ page }) => {
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: /Priya Nair/ }).click();
+    await page.getByRole('button', { name: 'Edit', exact: true }).first().click();
+
+    const ownerPicker = fieldByLabel(page, 'Relationship Owner / AMNEX Representative').getByRole('combobox');
+    await pickCombobox(page, ownerPicker, 'Jayendrasinh');
+
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    await expect(desktopPanel(page).getByText('AMNEX ownership')).toBeVisible();
+
+    // "Unassigned" should no longer be the state once an owner is picked.
+    const ownershipSection = desktopPanel(page).locator('text=AMNEX ownership').locator('..');
+    await expect(ownershipSection).not.toContainText('Unassigned');
+
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(desktopPanel(page).locator('text=AMNEX ownership').locator('..')).not.toContainText('Unassigned');
+  });
+});
+
+test.describe('Account Mapping — Department State/District/STD (per-row; no City/Town field)', () => {
+  // Item 2, corrected: each contact row picks its own State -> Type ->
+  // (District -> STD -> Number) — there is deliberately no City/Town field
+  // (src/data/std-codes.ts is a lookup aid, never a whitelist); STD/Number
+  // become available immediately once a District is picked, auto-filling
+  // STD only when the district maps to exactly one city in the dataset.
+  test('Item 2: State reveals Type, Type=Landline reveals District', async ({ page }) => {
+    const dialog = await createDepartmentUnderState(page, 'Odisha', `QA E2E District Test ${Date.now()}`);
+    await dialog.getByRole('button', { name: '+ Add Contact Number' }).click();
+
+    await dialog.getByLabel('State 1').selectOption({ label: 'Odisha' });
+    await dialog.getByLabel('Type 1').selectOption({ label: 'Landline / EPBX' });
+    const districtSelect = dialog.getByLabel('District 1');
+    await expect(districtSelect).toBeEnabled();
+    // The select flips enabled as soon as the row's own stateNodeId is set
+    // (same render as the state pick resolving), but its <option> list comes
+    // from a separate hierarchy.listChildren query that hasn't necessarily
+    // resolved yet — a plain, non-retrying `.count()` right after
+    // toBeEnabled() races that fetch (root-caused 2026-09-03: reproduced
+    // 100% locally, confirmed real goms-dev data has 30 real Odisha
+    // districts, confirmed the immediate count is 1 — placeholder only —
+    // while a delayed count sees all 31). expect.poll retries until the
+    // fetch lands instead of asserting on a single snapshot.
+    await expect.poll(() => districtSelect.locator('option').count()).toBeGreaterThan(1); // placeholder + at least one real district
+  });
+
+  test('Item 2: a district with exactly one mapped city auto-fills STD, and STD/Number are immediately usable', async ({ page }) => {
+    const dialog = await createDepartmentUnderState(page, 'Odisha', `QA E2E STD Test ${Date.now()}`);
+    await dialog.getByRole('button', { name: '+ Add Contact Number' }).click();
+
+    await dialog.getByLabel('State 1').selectOption({ label: 'Odisha' });
+    await dialog.getByLabel('Type 1').selectOption({ label: 'Landline / EPBX' });
+    // Cuttack has one mapped city; Khordha now has multiple towns and codes.
+    await dialog.getByLabel('District 1').selectOption({ label: 'Cuttack' });
+
+    const stdField = dialog.getByLabel('STD code 1');
+    await expect(stdField).toHaveValue('0671');
+    // Number is available in the same instant, no further gating on a city.
+    await dialog.getByPlaceholder('2345678').fill('2345678');
+    await expect(dialog.getByPlaceholder('2345678')).toHaveValue('2345678');
+  });
+
+  test('Item 2: a district with no mapped city at all never blocks STD/Number entry (the reported bug)', async ({ page }) => {
+    const dialog = await createDepartmentUnderState(page, 'Odisha', `QA E2E No-City Test ${Date.now()}`);
+    await dialog.getByRole('button', { name: '+ Add Contact Number' }).click();
+
+    await dialog.getByLabel('State 1').selectOption({ label: 'Odisha' });
+    await dialog.getByLabel('Type 1').selectOption({ label: 'Landline / EPBX' });
+    // Puri has no entry in src/data/std-codes.ts's Odisha rows (only
+    // Khordha/Cuttack/Balasore are seeded) — the real-world case this fix
+    // targets: STD must stay blank and freely editable, Number must stay
+    // enabled, and saving must succeed regardless of missing dataset coverage.
+    await dialog.getByLabel('District 1').selectOption({ label: 'Puri' });
+
+    const stdField = dialog.getByLabel('STD code 1');
+    await expect(stdField).toBeEnabled();
+    await expect(stdField).toHaveValue('');
+    await stdField.fill('06752');
+    await expect(stdField).toHaveValue('06752');
+
+    const numberField = dialog.getByPlaceholder('2345678');
+    await expect(numberField).toBeEnabled();
+    await numberField.fill('2223344');
+
+    await dialog.getByRole('button', { name: 'Create department' }).click();
+    await expect(desktopPanel(page).getByText('STD 06752')).toBeVisible();
+  });
+
+  test('Item 2: Mobile row shows only +91 + 10 digits, never STD/District', async ({ page }) => {
+    const dialog = await createDepartmentUnderState(page, 'Odisha', `QA E2E Mobile Test ${Date.now()}`);
+    await dialog.getByRole('button', { name: '+ Add Contact Number' }).click();
+
+    await dialog.getByLabel('State 1').selectOption({ label: 'Odisha' });
+    await dialog.getByLabel('Type 1').selectOption({ label: 'Mobile' });
+
+    await expect(dialog.getByLabel('District 1')).toHaveCount(0);
+    await expect(dialog.getByLabel('STD code 1')).toHaveCount(0);
+    await expect(dialog.getByText('+91')).toBeVisible();
+    await dialog.getByPlaceholder('9812345678').fill('9876543210');
+    await expect(dialog.getByPlaceholder('9812345678')).toHaveValue('9876543210');
+  });
+
+  test('Phase 5.2: Multi-contact numbers on department, save + reload', async ({ page }) => {
+    await openQaTestDepartment(page);
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
+
+    const rowsBefore = await page.locator('[data-testid^="contact-number-row-"]').count();
+    await page.getByRole('button', { name: '+ Add Contact Number' }).click();
+    const rows = page.locator('[data-testid^="contact-number-row-"]');
+    await expect(rows).toHaveCount(rowsBefore + 1);
+
+    // QA Test lives under Central Ministries (/state/0) — a new row there has
+    // no State field at all (skipGeography) and goes straight to Type, so a
+    // freshly-added blank row has exactly one <select> (Type) — targeting it
+    // by role avoids depending on the row's numbered aria-label text, which
+    // this dept's many accumulated rows (no e2e cleanup step exists) make
+    // slow to settle.
+    const lastRow = rows.last();
+    await lastRow.locator('select').selectOption({ label: 'Mobile' });
+
+    // The Number field is a PhoneInput (a compound country-code + digits
+    // control) — Field's implicit <label> wrapping only associates with a
+    // single native control, so getByLabel doesn't reach it; target its
+    // placeholder within the specific row instead.
+    await lastRow.getByPlaceholder(/9812345678/).fill('9876543210');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
+    await expect(page.locator('[data-testid^="contact-number-row-"]').last().getByPlaceholder(/9812345678/)).toHaveValue('9876543210');
+  });
+});
+
+test.describe('Account Mapping — Employee Form Cleanup', () => {
+  test('Phase 3.2: Company field relabeled to read-only Department', async ({ page }) => {
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: /Priya Nair/ }).click();
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
+
+    // Scoped to the edit dialog only. Root-caused 2026-09-03: the enhancement
+    // plan (docs/superpowers/plans/2026-09-01-goms-15-item-enhancement-plan.md
+    // line 312) deliberately limits this rename to the Add/Edit form —
+    // EmployeeDetails.tsx's read-only view is explicitly allowed to keep
+    // showing a "Company" DetailRow for a record with a populated
+    // `emp.company` (line 343), which real goms-dev data for Priya Nair does.
+    // An unscoped page-wide locator matches that legitimate read-only label
+    // too (doubled by the desktop+mobile dual render), which is why this
+    // failed — not an app bug.
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText('Department', { exact: true })).toBeVisible();
+    await expect(dialog.locator('text=Company')).toHaveCount(0);
+  });
+
+  test('Phase 3.2: Website and Address fields removed from employee form', async ({ page }) => {
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: /Priya Nair/ }).click();
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
+
+    await expect(page.getByLabel('Website')).toHaveCount(0);
+    await expect(page.getByLabel('Address')).toHaveCount(0);
+  });
+});
+
+test.describe('Account Mapping — People Directory Search', () => {
+  test('Phase 2.2: People directory search filters by name, designation, phone, email', async ({ page }) => {
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+
+    const searchInput = page.getByPlaceholder(/Search by name, designation, phone, email/);
+    await expect(searchInput).toBeVisible();
+
+    await searchInput.fill('Priya');
+    await expect(page.locator('[data-testid^="person-row-"]')).toHaveCount(1);
+    await expect(page.getByText('2 of', { exact: false })).not.toBeVisible().catch(() => {});
+    await expect(page.locator('body')).toContainText('1 of 2 people');
+
+    await searchInput.fill('priya.nair@example.com');
+    await expect(page.locator('[data-testid^="person-row-"]')).toHaveCount(1);
+
+    await searchInput.fill('QA Analyst');
+    await expect(page.locator('[data-testid^="person-row-"]')).toHaveCount(1);
+  });
+});
+
+test.describe('Account Mapping — Clipboard Paste', () => {
+  test('Phase 2.1: Employee profile picture clipboard paste target exists', async ({ page }) => {
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: /Priya Nair/ }).click();
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
+
+    const dropZone = page.getByTestId('profile-photo-dropzone');
+    await expect(dropZone).toBeVisible();
+    await expect(page.getByText('Upload, or click here and press Ctrl+V to paste an image.')).toBeVisible();
+  });
+});
+
+// ============================================================================
+// OPPORTUNITIES TESTS (Opportunity = a "Work" nested under a Department)
+// ============================================================================
+
+test.describe('Opportunities — Create and Sales Person Auto-Assignment', () => {
+  test('Phase 4.1: Create opportunity, pick Sales person, verify it is saved', async ({ page }) => {
+    await openQaTestDepartment(page);
+    await page.getByRole('button', { name: 'Create Opportunity' }).click();
+
+    await page.getByLabel('Opportunity name').fill('QA E2E Opportunity');
+    const salesPersonField = fieldByLabel(page, 'Sales person').getByRole('combobox');
+    await pickCombobox(page, salesPersonField, 'Jayendrasinh');
+
+    await page.getByRole('dialog').getByRole('button', { name: 'Create opportunity' }).click();
+    // Scoped through desktopPanel — the Works panel lives inside DetailsPanel,
+    // which /state/:code (like /directory) mounts twice (desktop <aside> +
+    // MobileDetailsSheet), so an unscoped testid match resolves to 2 elements.
+    // .first(): re-running this test against the same live goms-dev data
+    // (no cleanup step exists) accumulates one same-named real opportunity
+    // per run, not a mount duplicate — .first() keeps the assertion robust
+    // either way, since either row proves creation + save succeeded.
+    await expect(desktopPanel(page).locator('[data-testid^="opportunity-row-"]', { hasText: 'QA E2E Opportunity' }).first()).toBeVisible();
+  });
+});
+
+test.describe('Opportunities — Component Dropdown', () => {
+  test('Phase 7.1/7.3: Component dropdown supports search and preserves selection', async ({ page }) => {
+    await openQaTestDepartment(page);
+    await page.getByRole('button', { name: 'Create Opportunity' }).click();
+
+    const componentField = fieldByLabel(page, 'Component').locator('[aria-haspopup="listbox"]');
+    await componentField.click();
+    const searchInput = page.getByPlaceholder('Search components…');
+    await expect(searchInput).toBeVisible();
+    await searchInput.fill('Hardware'); // a real WORK_COMPONENT_GROUPS option (src/features/nodes/department-meta.ts)
+
+    const firstOption = page.getByRole('checkbox').first();
+    await expect(firstOption).toBeVisible();
+    await firstOption.click();
+
+    const chipCountBefore = await page.locator('[aria-label^="Remove "]').count();
+    expect(chipCountBefore).toBeGreaterThan(0);
+    await expect(page.locator('[aria-label="Remove Hardware"]')).toBeVisible();
+
+    // Interacting with an unrelated field must not corrupt/clear the already-
+    // selected chip — re-clicking componentField itself isn't a safe way to
+    // check this: its bounding box wraps the chip's own "Remove" button, so a
+    // click there is as likely to hit "Remove" as the trigger (Escape isn't
+    // safe either — it closes the *outer* WorkFormDialog, since
+    // MultiSelectDropdown has no Escape handler of its own).
+    await page.getByLabel('Opportunity name').fill('QA E2E Opportunity (component check)');
+    const chipCountAfter = await page.locator('[aria-label^="Remove "]').count();
+    expect(chipCountAfter).toBe(chipCountBefore);
+    await expect(page.locator('[aria-label="Remove Hardware"]')).toBeVisible();
+  });
+});
+
+test.describe('Opportunities — Commercial Calculator isolation', () => {
+  test('Commercial Calculator loads independently of Sales Team RM/GM data', async ({ page }) => {
+    await page.goto('/commercial-calculator', { waitUntil: 'networkidle' });
+    await expect(page.locator('body')).not.toContainText('Error 404');
+  });
+});
+
+// ============================================================================
+// MEETINGS & TIMELINE TESTS
+// ============================================================================
+
+test.describe('Meetings — Attendee Search and Multi-Select', () => {
+  test('Phase 8.3: Timeline attendee multi-select with searchable dropdown', async ({ page }) => {
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: /Priya Nair/ }).click();
+    await page.getByRole('button', { name: 'Add meeting', exact: true }).first().click();
+
+    const attendeeTrigger = fieldByLabel(page, 'Attending AMNEX Sales Team Members').getByRole('button');
+    await attendeeTrigger.first().click();
+
+    const searchInput = page.getByPlaceholder('Search sales team…');
+    await expect(searchInput).toBeVisible();
+    await searchInput.fill('Jayendrasinh');
+    await expect(page.getByRole('checkbox')).toHaveCount(1);
+    await page.getByRole('checkbox').first().click();
+
+    await expect(page.getByLabel(/Remove Jayendrasinh/)).toBeVisible();
+  });
+
+  test('Phase 8.3: Attendee remove via × button', async ({ page }) => {
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: /Priya Nair/ }).click();
+    await page.getByRole('button', { name: 'Add meeting', exact: true }).first().click();
+
+    await fieldByLabel(page, 'Attending AMNEX Sales Team Members').getByRole('button').first().click();
+    await page.getByPlaceholder('Search sales team…').fill('Jayendrasinh');
+    await page.getByRole('checkbox').first().click();
+
+    const removeButton = page.getByLabel(/Remove Jayendrasinh/);
+    await expect(removeButton).toBeVisible();
+    await removeButton.click();
+    await expect(removeButton).toHaveCount(0);
+  });
+});
+
+test.describe('Meetings — Agenda/Outcome/Next Steps', () => {
+  test('Phase 8.1–8.2: Timeline event with Agenda/Outcome/Next Steps', async ({ page }) => {
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: /Priya Nair/ }).click();
+    await page.getByRole('button', { name: 'Add meeting', exact: true }).first().click();
+
+    await page.getByLabel('Title').fill('E2E Sales Meeting');
+    await page.getByRole('textbox', { name: 'Agenda', exact: true }).fill('Discuss Q4 strategy');
+    await page.getByRole('textbox', { name: 'Outcome', exact: true }).fill('Agreed on pricing');
+    await page.getByRole('textbox', { name: 'Next steps', exact: true }).fill('Follow up next week');
+
+    await page.getByRole('dialog', { name: 'Add New Meeting' }).getByRole('button', { name: 'Add Meeting', exact: true }).click();
+    // .first(): same reasoning as the Opportunity test above — no cleanup
+    // step exists against this live goms-dev data, so re-running this test
+    // accumulates one more same-named real timeline entry per run, not a
+    // mount duplicate. Root-caused 2026-09-03: an unscoped match here
+    // strict-mode-violates once 2+ have accumulated; any one of them proves
+    // creation succeeded.
+    await expect(desktopPanel(page).getByText('E2E Sales Meeting').first()).toBeVisible();
+  });
+});
+
+test.describe('Meetings — Edit Meeting', () => {
+  test('Phase 8.4: Edit Meeting updates the same record and type is read-only', async ({ page }) => {
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: /Priya Nair/ }).click();
+
+    // Root-caused 2026-09-03: clicking Priya Nair triggers an async timeline
+    // fetch, so a bare, non-retrying `.count()` immediately after can race it
+    // and see 0 before the entry renders — same race class already fixed for
+    // the District select above (`expect.poll`). Waiting for the Edit
+    // affordance itself to appear first proves the timeline has rendered,
+    // giving `entriesBefore` a stable value to snapshot.
+    const editButton = desktopPanel(page).getByLabel('Edit QA Kickoff Meeting');
+    await expect(editButton).toBeVisible();
+    const entriesBefore = await desktopPanel(page).locator('text=QA Kickoff Meeting').count();
+    await editButton.click();
+
+    const typeSelect = page.getByLabel('Meeting type');
+    await expect(typeSelect).toBeDisabled();
+
+    const outcomeField = page.getByRole('textbox', { name: 'Outcome', exact: true });
+    const currentValue = await outcomeField.inputValue();
+    await outcomeField.fill(`${currentValue} - EDITED ${Date.now()}`);
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+
+    await expect(desktopPanel(page).getByText('QA Kickoff Meeting')).toHaveCount(entriesBefore);
+    await expect(desktopPanel(page).getByText(/Outcome:.*EDITED/)).toBeVisible();
+  });
+});
+
+test.describe('Meetings — Department Meeting Timeline', () => {
+  test('Phase 8.5: Department shows meetings from subtree employees with no duplicates', async ({ page }) => {
+    await openQaTestDepartment(page);
+
+    await expect(desktopPanel(page).getByText(/Meetings · \d+/)).toBeVisible();
+    const titles = await desktopPanel(page).locator('text=QA Kickoff Meeting').allTextContents();
+    // The department view is read-only (no Edit affordance) — same event
+    // should not be listed more than once even though 2 employees share it.
+    expect(titles.length).toBeLessThanOrEqual(1);
+  });
+});
+
+// ============================================================================
+// SALES TEAM & RM/GM TESTS
+// ============================================================================
+
+test.describe('Sales Team — RM/GM Editing', () => {
+  test('Item 1: Edit Sales Person shows editable RM and independently editable GM (auto-derived by default)', async ({ page }) => {
+    await page.goto('/sales/roster', { waitUntil: 'networkidle' });
+    await unlockSalesEditing(page);
+
+    await page.getByRole('button', { name: /Jayendrasinh Puwar/ }).click();
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
+
+    // SalesTeamPicker (src/features/employees/SalesTeamPicker.tsx) hardcodes
+    // aria-label="Relationship owner / AMNEX representative" regardless of
+    // context, so getByLabel('Reporting Manager (RM)') never matches here —
+    // scope through Field's wrapping <label> text instead.
+    const rmField = fieldByLabel(page, 'Reporting Manager (RM)').getByRole('combobox');
+    await expect(rmField).toBeVisible();
+    await expect(rmField).toBeEditable();
+
+    // GM is now independently editable (item 1) — auto-derived by default
+    // (no explicit override stored yet), with a hint distinguishing that
+    // from a manually-set value.
+    const gmFieldWrapper = fieldByLabel(page, 'GM / Higher Reporting Manager');
+    const gmField = gmFieldWrapper.getByRole('combobox');
+    await expect(gmField).toBeVisible();
+    await expect(gmField).toBeEditable();
+    await expect(gmFieldWrapper.getByText(/auto-derived from reporting manager/i)).toBeVisible();
+  });
+
+  test('Phase 6.1–6.3: GM auto-derives when RM is changed, and persists in org chart', async ({ page }) => {
+    await page.goto('/sales/roster', { waitUntil: 'networkidle' });
+    await unlockSalesEditing(page);
+
+    await page.getByRole('button', { name: /Jayendrasinh Puwar/ }).click();
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
+
+    const rmField = fieldByLabel(page, 'Reporting Manager (RM)').getByRole('combobox');
+    // Kondala Rao ("Regional Manager & Head General Manager", a mid-tier
+    // role) has his own upstream manager, so GM derives to a real name here —
+    // "Rohit Tiku" ("Regional Head", near the top of the tree) would derive
+    // to "Unassigned" instead, which wouldn't prove the derivation happened.
+    await pickCombobox(page, rmField, 'Kondala');
+
+    const gmFieldWrapper = fieldByLabel(page, 'GM / Higher Reporting Manager');
+    await expect(gmFieldWrapper).not.toContainText('Unassigned');
+
+    await page.getByRole('button', { name: 'Save changes' }).click();
+
+    await page.goto('/sales/orgchart', { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: 'Expand all', exact: true }).click();
+    await expect(page.locator('[data-testid^="sales-org-chart-card-"]', { hasText: 'Jayendrasinh Puwar' })).toBeVisible();
+  });
+});
+
+// ============================================================================
+// AVATAR TESTS
+// ============================================================================
+
+test.describe('Avatars — Display Across System', () => {
+  test('Phase 9.1–9.2: Employee avatars render in the directory and detail view', async ({ page }) => {
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+
+    const rows = page.locator('[data-testid^="person-row-"]');
+    await expect(rows).toHaveCount(2);
+
+    await page.getByRole('button', { name: /Priya Nair/ }).click();
+    await expect(desktopPanel(page).getByText('AMNEX ownership')).toBeVisible();
+  });
+
+  test('Phase 9.3: Sales Team avatars show initials (no photos, since none have one)', async ({ page }) => {
+    await page.goto('/sales/roster', { waitUntil: 'networkidle' });
+
+    const avatars = page.getByTestId('avatar');
+    await expect(avatars.first()).toBeVisible();
+    const hasImg = await avatars.first().locator('img').count();
+    expect(hasImg).toBe(0);
+  });
+
+  test('Phase 9.2–9.4: Avatars render for opportunity owners and meeting attendees', async ({ page }) => {
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: /Priya Nair/ }).click();
+
+    // Timeline attendee row for the seeded "Mr. Rohit Tiku" attendee.
+    const attendeeRow = desktopPanel(page).locator('text=Mr. Rohit Tiku').locator('..');
+    await expect(attendeeRow.getByTestId('avatar')).toBeVisible();
+  });
+});
+
+// ============================================================================
+// ADMIN DATA IMPORT
+// ============================================================================
+// As of 2026-09-02, VITE_ADMIN_IMPORT_ENABLED=true on this build (see
+// .gitlab-ci.yml's deploy-dev job), so the router registers /admin/data-import
+// (src/app/router.tsx). The route itself is still gated behind
+// AdminImportAuthGate (src/modules/admin-data-import/auth/AdminImportAuthGate.tsx)
+// — Google Sign-In, then a server-side email allow-list
+// (apps/api/src/auth/verifyAdminImportToken.ts) — so an unauthenticated
+// visitor sees the sign-in screen, not the dashboard. This suite runs
+// without a signed-in session, so it only verifies that first gate.
+test.describe('Admin Data Import', () => {
+  test('shows the Google Sign-In gate instead of a 404 now that the flag is on', async ({ page }) => {
+    await page.goto('/admin/data-import');
+    await expect(page.getByRole('button', { name: /sign in with google/i })).toBeVisible();
+    await expect(page.getByText('Error 404')).not.toBeVisible();
+  });
+});
+
+// ============================================================================
+// CROSS-MODULE PROPAGATION TESTS
+// ============================================================================
+
+test.describe('Cross-Module — Ownership Propagation', () => {
+  test('Ownership set on an employee is reflected consistently after reload', async ({ page }) => {
+    // Scoped to the directory list row (not a bare role/name match) — once
+    // Vikram Rao is selected, EmployeeDetails' own "Reporting line" section
+    // renders a second, disabled "Vikram Rao" button (a self-reference in his
+    // own reporting chain) that would otherwise collide with this locator.
+    await page.goto('/directory', { waitUntil: 'networkidle' });
+    await page.locator('[data-testid^="person-row-"]', { hasText: 'Vikram Rao' }).click();
+
+    await expect(desktopPanel(page).getByText('AMNEX ownership')).toBeVisible();
+    const before = await desktopPanel(page).locator('text=AMNEX ownership').locator('..').innerText();
+
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.locator('[data-testid^="person-row-"]', { hasText: 'Vikram Rao' }).click();
+    const after = await desktopPanel(page).locator('text=AMNEX ownership').locator('..').innerText();
+
+    expect(after).toBe(before);
+  });
+});
+
+// ============================================================================
+// GAP-ANALYSIS FOLLOW-UP FIXES (2026-09-07) — covers behavior the existing
+// Phase 5/8 tests above don't reach: the read-only DISPLAY side of item 2's
+// contact data, item 4's department-inheritance display, item 7's People
+// CANVAS search (the existing Phase 2.2 test only covers the List view), and
+// item 15's per-entry contact attribution once a department aggregates
+// meetings from more than one contact.
+// ============================================================================
+
+test.describe('Item 2 — Department Contact display (read view)', () => {
+  test('State/District/contact numbers show up on the department page after saving, not just on the form', async ({ page }) => {
+    const deptName = `QA E2E Contact Display Test ${Date.now()}`;
+    const dialog = await createDepartmentUnderState(page, 'Odisha', deptName);
+    await dialog.getByRole('button', { name: '+ Add Contact Number' }).click();
+    await dialog.getByLabel('State 1').selectOption({ label: 'Odisha' });
+    await dialog.getByLabel('Type 1').selectOption({ label: 'Landline / EPBX' });
+    await dialog.getByLabel('District 1').selectOption({ label: 'Khordha' });
+    await pickCombobox(page, dialog.getByRole('combobox', { name: 'City/Town 1' }), 'Bhubaneswar');
+    await expect(dialog.getByLabel('STD code 1')).toHaveValue('0674');
+    await dialog.getByPlaceholder('2345678').fill('2345678');
+    await dialog.getByRole('button', { name: 'Create department' }).click();
+
+    await expect(desktopPanel(page).getByRole('heading', { name: `Department of ${deptName}` })).toBeVisible();
+    await expect(desktopPanel(page).getByText('Odisha')).toBeVisible();
+    await expect(desktopPanel(page).getByText('Khordha')).toBeVisible();
+    await expect(desktopPanel(page).getByText('Contact numbers')).toBeVisible();
+    await expect(desktopPanel(page).getByText('STD 0674')).toBeVisible();
+  });
+});
+
+test.describe('Item 4 — Employee inherits Website/Address from its Department', () => {
+  test('an employee under a department with Website/Address shows the department\'s values, not a blank field', async ({ page }) => {
+    const deptName = `QA E2E Inheritance Test ${Date.now()}`;
+    const dialog = await createDepartmentUnderState(page, 'Odisha', deptName);
+    await fieldByLabel(page, 'Website').getByRole('textbox').fill('https://example-dept.gov.in');
+    await dialog.getByRole('button', { name: 'Add location' }).click();
+    await dialog.getByRole('textbox', { name: 'Address', exact: true }).fill('1 Test Secretariat Road');
+    await dialog.getByRole('button', { name: 'Create department' }).click();
+
+    // The "Add employee" button is a Menu trigger (NodeDetails.tsx), not a
+    // direct dialog opener — first click opens the menu, second click on the
+    // "Add employee" menu item actually opens the form.
+    await desktopPanel(page).getByRole('button', { name: 'Add employee' }).click();
+    await page.getByRole('menuitem', { name: 'Add employee' }).click();
+    const empDialog = page.getByRole('dialog', { name: 'Add employee' });
+    await empDialog.getByLabel('Full name').fill('Inheritance Test Person');
+    await empDialog.getByLabel('Designation').fill('Test Officer');
+    await empDialog.getByRole('button', { name: 'Add employee' }).click();
+
+    await expect(desktopPanel(page).getByText('https://example-dept.gov.in')).toBeVisible();
+    await expect(desktopPanel(page).getByText('1 Test Secretariat Road')).toBeVisible();
+  });
+});
+
+test.describe('Item 7 — People CANVAS search (List view already covered by Phase 2.2)', () => {
+  test('searching a non-root contact\'s name in the canvas People view surfaces them, even though their manager does not match', async ({ page }) => {
+    await page.goto('/state/0', { waitUntil: 'networkidle' });
+    // Tabs.tsx renders plain <button>s, not role="tab".
+    await page.getByRole('button', { name: 'People', exact: true }).click();
+    await page.getByRole('button', { name: 'canvas', exact: true }).click();
+    // DepartmentCombobox.tsx (canvas-only, distinct from the generic
+    // Combobox component pickCombobox() targets) renders its options as
+    // plain buttons in a popover, not role="listbox"/"option" — click to
+    // open, type to filter, click the exact match by name.
+    const deptCombobox = page.getByPlaceholder('Search departments…');
+    await deptCombobox.click();
+    await deptCombobox.fill('QA Test');
+    await page.getByRole('button', { name: 'QA Test', exact: true }).click();
+
+    // Priya Nair reports to Vikram Rao (suite fixture note above) — neither
+    // "priya" nor "nair" appears anywhere in Vikram's own name/designation/
+    // phone/email, so before the fix (root-only filtering) this query
+    // returned nothing at all.
+    await page.getByLabel('Search people').fill('priya');
+    await expect(page.getByRole('button', { name: /Priya Nair/ })).toBeVisible();
+    // Selecting QA Test also populates the sidebar's own DetailsPanel (its
+    // unrelated, unfiltered "Positions" list legitimately shows both
+    // employees) — every VISIBLE "Vikram Rao" button must be inside that
+    // <aside>, i.e. none left over on the canvas itself once the two counts
+    // match (StateWorkspace's CSS-hidden mobile-sheet duplicate is excluded
+    // by `:visible` on both sides).
+    const visibleVikram = page.locator('button:visible', { hasText: 'Vikram Rao' });
+    const visibleVikramInAside = page.locator('aside').locator('button:visible', { hasText: 'Vikram Rao' });
+    await expect(visibleVikramInAside).toHaveCount(await visibleVikram.count());
+  });
+});
+
+test.describe('Item 15 — Department Meetings section names which contact each entry belongs to', () => {
+  test('a meeting entry aggregated on the department page shows the contact\'s name', async ({ page }) => {
+    await openQaTestDepartment(page);
+    await expect(desktopPanel(page).getByText(/Meetings · \d+/)).toBeVisible();
+    // The suite's own seeded "QA Kickoff Meeting" (Phase 8.5, above) belongs
+    // to one of QA Test's two contacts — whichever it is, their name must now
+    // appear next to it, since this page aggregates entries from more than
+    // one contact and used to show no attribution at all.
+    const entry = desktopPanel(page).locator('text=QA Kickoff Meeting').locator('../..');
+    const hasVikram = await entry.getByText('Vikram Rao').count();
+    const hasPriya = await entry.getByText('Priya Nair').count();
+    expect(hasVikram + hasPriya).toBeGreaterThan(0);
+  });
+});

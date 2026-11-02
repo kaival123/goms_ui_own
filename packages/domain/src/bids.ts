@@ -1,0 +1,270 @@
+import {
+  CUSTOM_FIELD_PREFIX, STANDARD_BID_FIELD_TYPES, matchesTypedRule,
+  isFilterGroup, type CustomFieldType, type FilterNode,
+} from './bidCustomFields.js'
+import { GENERAL_FIELDS, generalFieldType } from './bidGeneral.js'
+import { LIFECYCLE_FIELDS, lifecycleIndex } from './opportunityLifecycle.js'
+
+// Live Bids' own stage machine — deliberately separate from
+// opportunities.ts's PIPELINE_STAGES (spec §4.4). Data, not a TypeScript
+// union, same reasoning as PIPELINE_STAGES: a retired stage must keep
+// rendering on historical rows.
+export interface BidStageDef {
+  key: string
+  label: string
+  order: number
+  closed: boolean
+}
+
+export const BID_STAGES: BidStageDef[] = [
+  { key: 'solutioning', label: 'Solutioning', order: 0, closed: false },
+  { key: 'qualification', label: 'Qualification', order: 1, closed: false },
+  { key: 'preBidQueries', label: 'Pre-bid Queries', order: 2, closed: false },
+  { key: 'commercialProposal', label: 'Commercial Proposal', order: 3, closed: false },
+  { key: 'submitted', label: 'Submitted', order: 4, closed: false },
+  { key: 'goApproved', label: 'Go Approved', order: 5, closed: true },
+  { key: 'dropped', label: 'Dropped', order: 6, closed: true },
+]
+
+export const BID_STAGE_MAP: Record<string, BidStageDef> = Object.fromEntries(BID_STAGES.map((s) => [s.key, s]))
+export const DEFAULT_BID_STAGE_KEY = 'solutioning'
+
+/** The Opportunity sheets a bid can LIVE in — each row belongs to exactly one.
+ *  (Master is not one of them: it is the collective view over all of these.) */
+export const OWNED_SHEETS = ['bidTracker', 'pipeline-funnel', 'pipeline-backup', 'pipeline-commits', 'campaign'] as const
+export type OwnedSheet = (typeof OWNED_SHEETS)[number]
+export const DEFAULT_OWNED_SHEET: OwnedSheet = 'bidTracker'
+export const OWNED_SHEET_LABELS: Record<OwnedSheet, string> = {
+  bidTracker: 'Live Bids',
+  'pipeline-funnel': 'Pipeline · Funnel',
+  'pipeline-backup': 'Pipeline · Backup',
+  'pipeline-commits': 'Pipeline · Commits',
+  campaign: 'Campaign',
+}
+export function isOwnedSheet(value: unknown): value is OwnedSheet {
+  return typeof value === 'string' && (OWNED_SHEETS as readonly string[]).includes(value)
+}
+
+/** -1 for an unknown key, so a stale/retired stage never compares as
+ *  "at or after" anything by accident. */
+export function bidStageOrder(key: string): number {
+  return BID_STAGE_MAP[key]?.order ?? -1
+}
+
+export const isBuiltInBidStage = (key: string): boolean => BID_STAGES.some((s) => s.key === key)
+
+/** The built-in stage a stage counts as for the stage rules (Go gate, timeline): a built-in stage is itself; a
+ *  user-added one is the nearest open built-in stage before it in `stages` (the user's order), else Solutioning. */
+export function builtInBidStageFor(key: string, stages: readonly { key: string }[] = BID_STAGES): string {
+  if (isBuiltInBidStage(key)) return key
+  for (let i = stages.findIndex((s) => s.key === key) - 1; i >= 0; i--) {
+    const builtIn = BID_STAGES.find((s) => s.key === stages[i].key)
+    if (builtIn && !builtIn.closed) return builtIn.key
+  }
+  return DEFAULT_BID_STAGE_KEY
+}
+
+/** Gate for `decision='go'` (spec §4.4's tightening) — a Go decision cannot
+ *  be recorded before the bid has actually reached Submitted. `stages` (the
+ *  user's order) lets a user-added stage placed after Submitted pass. */
+export function isAtOrAfterSubmitted(key: string, stages: readonly { key: string }[] = BID_STAGES): boolean {
+  return bidStageOrder(builtInBidStageFor(key, stages)) >= bidStageOrder('submitted')
+}
+
+/** A Settings › Masters › Live Bids › Bid Stages row: `code` is the stage key stored on bids, `name` its label. */
+export interface BidStageMasterRow { code: string; name: string; active: boolean; displayOrder: number }
+export interface ResolvedBidStage extends BidStageDef { active: boolean; builtIn: boolean }
+
+/** The Bid Stage list in the user's order (`order` = position). Built-in stages keep their key and `closed`, are
+ *  always active and always present (one missing from the master keeps its built-in place); user-added stages are
+ *  plain open stages. No rows (master not loaded yet) gives BID_STAGES. */
+export function resolveBidStages(rows: readonly BidStageMasterRow[]): ResolvedBidStage[] {
+  const listed = new Set(rows.map((r) => r.code))
+  return [
+    ...rows.map((r) => ({ key: r.code, label: r.name, rank: r.displayOrder, active: r.active })),
+    ...BID_STAGES.filter((s) => !listed.has(s.key)).map((s) => ({ key: s.key, label: s.label, rank: s.order, active: true })),
+  ].sort((a, b) => a.rank - b.rank).map(({ key, label, active }, order) => {
+    const builtIn = BID_STAGES.find((s) => s.key === key)
+    return { key, label, order, closed: builtIn?.closed ?? false, active: active || !!builtIn, builtIn: !!builtIn }
+  })
+}
+
+/** Why a Bid Stages master change is refused, or null. Bids store a stage's code, so it never changes. Built-in
+ *  stages carry the stage rules (default stage, Go gate, decision-set closed stages, timeline phases, system
+ *  views), so they can be renamed and reordered but never deactivated or deleted. `inUse` = bids at the stage. */
+export function bidStageChangeError(
+  stage: { code: string; name: string },
+  change: { code?: string; active?: boolean; remove?: boolean; inUse?: number },
+): string | null {
+  if (change.code !== undefined && change.code.trim() !== stage.code.trim()) return `A stage's code can't change — bids store it. Rename "${stage.name}" instead.`
+  if (isBuiltInBidStage(stage.code) && (change.remove || change.active === false)) {
+    return `"${stage.name}" is a built-in stage the bid workflow relies on — it can't be ${change.remove ? 'deleted' : 'deactivated'}.`
+  }
+  if (change.remove && change.inUse) return `"${stage.name}" is the stage of ${change.inUse} bid${change.inUse === 1 ? '' : 's'} — move them to another stage or deactivate it instead.`
+  return null
+}
+
+/** "Next Stage Requirements" banner — derived, not persisted (spec §10).
+ *  Keyed by the CURRENT stage: what's needed to move past it. */
+export const BID_STAGE_REQUIREMENTS: Record<string, string[]> = {
+  solutioning: ['Finalize technical solution', 'Submit pre-bid queries'],
+  qualification: ['Record executive Go / No-Go sign-off'],
+  preBidQueries: ['Receive pre-bid query responses'],
+  commercialProposal: ['Finalize commercial proposal', 'Arrange EMD/tender fee'],
+  submitted: ['Await tender opening / evaluation'],
+  goApproved: [],
+  dropped: [],
+}
+
+export function formatBidCode(year: number | string, seq: number): string {
+  return `BID-${year}-${String(seq).padStart(4, '0')}`
+}
+
+/** A persisted filter rule. `operator` widened from `'eq'` (spec §8.1): `eq`
+ *  is still valid for every field type, so stored rules and the system views
+ *  are unaffected. `value2` is the upper bound of `between`; `values` is the
+ *  option list of `in`. */
+export type SystemBidViewFilterRule = FilterNode
+export interface SystemBidView {
+  key: string
+  name: string
+  filterRules: SystemBidViewFilterRule[]
+}
+
+// Permanent system views (spec §9.1) — generic to any Live Bids
+// deployment. "$currentUser" is resolved server-side to ctx.user.email at
+// query time (Task 19); it is never a literal stored email. These are the
+// ONLY seeded/initial views — "Smart Transport Bids" and "High Value Deals
+// > 20 Cr" from the reference screenshots are illustrative examples of what
+// a user creates later and must never appear here.
+export const SYSTEM_BID_VIEWS: SystemBidView[] = [
+  { key: 'allBids', name: 'All Bids', filterRules: [] },
+  { key: 'myBids', name: 'My Bids', filterRules: [{ field: 'ownerEmail', operator: 'eq', value: '$currentUser' }] },
+  { key: 'solutioning', name: 'Solutioning', filterRules: [{ field: 'stageKey', operator: 'eq', value: 'solutioning' }] },
+  { key: 'qualification', name: 'Qualification', filterRules: [{ field: 'stageKey', operator: 'eq', value: 'qualification' }] },
+  { key: 'dueSoon', name: 'Due Soon', filterRules: [{ field: 'attentionFlag', operator: 'eq', value: 'dueSoon' }] },
+  { key: 'overdue', name: 'Overdue', filterRules: [{ field: 'attentionFlag', operator: 'eq', value: 'overdue' }] },
+  { key: 'goApproved', name: 'Go Approved', filterRules: [{ field: 'stageKey', operator: 'eq', value: 'goApproved' }] },
+]
+export const SYSTEM_BID_VIEW_KEYS = new Set(SYSTEM_BID_VIEWS.map((v) => v.key))
+
+export type BidAttentionFlag = 'dueSoon' | 'overdue' | 'corrigendumPending' | 'onTrack'
+
+/** Spec §15 — computed at query time, never stored. Corrigendum-pending
+ *  takes precedence over the date-based flags. */
+export function computeAttentionFlag(input: {
+  dueAt: string | null
+  hasPendingCorrigendum: boolean
+  today: string
+  dueSoonDays?: number
+}): BidAttentionFlag {
+  if (input.hasPendingCorrigendum) return 'corrigendumPending'
+  if (!input.dueAt) return 'onTrack'
+  const dueDate = input.dueAt.slice(0, 10)
+  if (dueDate < input.today) return 'overdue'
+  const dueSoonDays = input.dueSoonDays ?? 3
+  const threshold = new Date(input.today)
+  threshold.setDate(threshold.getDate() + dueSoonDays)
+  if (dueDate <= threshold.toISOString().slice(0, 10)) return 'dueSoon'
+  return 'onTrack'
+}
+
+/** Resolves the one supported placeholder token. Anything else passes
+ *  through unchanged. Deterministic even with no signed-in user (spec's
+ *  Review Focus: AUTH_ENFORCEMENT_ENABLED is off by default across this
+ *  codebase) — resolves to null, which then matches nothing rather than
+ *  throwing, so "My Bids" with no signed-in user is simply an empty list,
+ *  not a crash. */
+export function resolveFilterValue(value: string, currentUserEmail: string | null): string | null {
+  return value === '$currentUser' ? currentUserEmail : value
+}
+
+/** Filters grid rows. `rules` is an AND list whose items are either a rule
+ *  or a group (`{logic, rules}`) joined by AND / OR, evaluated recursively — so
+ *  "State = Gujarat AND (Region = West OR Region = North)" is
+ *  `[stateRule, { logic: 'or', rules: [west, north] }]`. A flat array of rules
+ *  keeps its old meaning (every rule must match). `fieldTypes` maps a rule's
+ *  `field` to its type: standard columns default to `STANDARD_BID_FIELD_TYPES`,
+ *  and the caller adds one `custom:<key>` entry per ACTIVE custom field. Custom
+ *  cells are read from `row.customValues[key]`.
+ *
+ *  A rule on a `custom:<key>` field that is absent from `fieldTypes` (the
+ *  column was archived or never existed) is SKIPPED — not "match nothing" —
+ *  so a saved view survives its column being archived (spec §8.1). A group left
+ *  with no applicable rules is skipped too. */
+export function applyFilterRules<T extends Record<string, unknown>>(
+  rows: T[],
+  rules: SystemBidViewFilterRule[],
+  currentUserEmail: string | null,
+  fieldTypes: Record<string, CustomFieldType> = {},
+): T[] {
+  const generalTypes: Record<string, CustomFieldType> = Object.fromEntries(GENERAL_FIELDS.map(field => [`general:${field.key}`, generalFieldType(field)]))
+  const lifecycleTypes = Object.fromEntries(LIFECYCLE_FIELDS.map(field => [`lifecycle:${field.key}`, field.type])) as Record<string, CustomFieldType>
+  const types = { ...STANDARD_BID_FIELD_TYPES, ...generalTypes, ...lifecycleTypes, ...fieldTypes }
+  const applicable = (n: FilterNode): boolean =>
+    isFilterGroup(n) ? n.rules.some(applicable) : n.field !== 'opportunityId' && (!n.field.startsWith(CUSTOM_FIELD_PREFIX) || n.field in types)
+  const live = rules.filter(applicable)
+  if (!live.length) return rows
+
+  const matchRule = (row: T, rule: Exclude<FilterNode, { logic: unknown }>): boolean => {
+    const target = resolveFilterValue(rule.value, currentUserEmail)
+    // A token that resolves to "no value" (e.g. $currentUser with no
+    // signed-in user) must never match, even a row whose own field is also
+    // null/undefined — otherwise "My Bids" with no signed-in user would
+    // wrongly surface every bid that happens to have no owner assigned.
+    if (target === null) return false
+    const isCustom = rule.field.startsWith(CUSTOM_FIELD_PREFIX)
+    const lifecycleField = rule.field.startsWith('lifecycle:') ? LIFECYCLE_FIELDS.find(field => rule.field === `lifecycle:${field.key}`) : undefined
+    const lifecycleVisible = !lifecycleField || !isOwnedSheet(row.sheet) || lifecycleIndex(row.sheet) >= lifecycleIndex(lifecycleField.sheet)
+    const cell = isCustom
+      ? (row.customValues as Record<string, unknown> | undefined)?.[rule.field.slice(CUSTOM_FIELD_PREFIX.length)]
+      : rule.field.startsWith('general:') ? (row.generalValues as Record<string, unknown> | undefined)?.[rule.field.slice('general:'.length)]
+        : rule.field.startsWith('lifecycle:') ? lifecycleVisible ? (row.lifecycleData as Record<string, unknown> | undefined)?.[rule.field.slice('lifecycle:'.length)] : undefined : row[rule.field]
+    const type = types[rule.field] ?? 'text'
+    // A saved "contains" rule on a field that became a multi-select (Scope of Work → Requirement) still reads its text.
+    return matchesTypedRule(type === 'multiselect' && rule.operator === 'contains' ? 'text' : type, cell, rule, target)
+  }
+  const matchNode = (row: T, node: FilterNode): boolean => {
+    if (!isFilterGroup(node)) return matchRule(row, node)
+    const kids = node.rules.filter(applicable)
+    if (!kids.length) return true
+    return node.logic === 'or' ? kids.some((k) => matchNode(row, k)) : kids.every((k) => matchNode(row, k))
+  }
+  return rows.filter((row) => live.every((node) => matchNode(row, node)))
+}
+
+// --- Create Bid: resolving the opportunity's department ----------------------
+// A bid needs its opportunity to belong to a department. When it doesn't, the
+// caller supplies exactly one of these — an existing department, or a new
+// department under a parent ("major") department that is itself existing or new.
+// The department is stored on the OPPORTUNITY (opportunities.department_id); the
+// bid never keeps a copy.
+export type DepartmentParentChoice =
+  | { mode: 'existing'; departmentId: string }
+  /** `stateCode` is the new major department's jurisdiction (0 = Central
+   *  Ministries); a child department always inherits its parent's. */
+  | { mode: 'create'; name: string; stateCode: number | null }
+
+export type DepartmentChoice =
+  | { mode: 'existing'; departmentId: string }
+  | { mode: 'create'; name: string; parent: DepartmentParentChoice }
+
+/** What the Create Bid dialog collects when the opportunity itself is new. */
+export interface NewBidOpportunity {
+  opportunityName: string
+  gemTenderId?: string
+  city?: string | null
+  referenceNo?: string | null
+  assignmentName?: string | null
+  submissionDate?: string
+  /** One of OPPORTUNITY_TYPES (opportunityCode.ts); '' / absent = not set. */
+  opportunityType?: string
+}
+
+export const DEPARTMENT_REQUIRED_MESSAGE =
+  'This opportunity has no department. Choose an existing department or create one to create the bid.'
+
+/** Protected values ("freeze a fact") are switched off for now: nothing is
+ *  frozen, edits and corrigenda are never blocked, and old freeze records do
+ *  not block deleting a bid. Records are kept so this can be turned back on. */
+export const PROTECTED_VALUES_ENFORCED = false
