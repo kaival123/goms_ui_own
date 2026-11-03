@@ -284,10 +284,10 @@ export function TeamsWorkspace() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 bg-paper/70 px-3 pt-2 sm:px-6">
+      <div className="flex shrink-0 items-stretch gap-2 bg-paper/70 px-3 pt-2 sm:px-6">
         <div className="min-w-0 flex-1"><Tabs tabs={tabs} value={tab.value} onChange={(value) => navigate(`/teams/${value}`)} /></div>
         {/* The active tab's page actions (Directory's New contact) render here, in line with the tabs. */}
-        <div ref={setActionsSlot} className="flex shrink-0 items-center gap-1" />
+        <div ref={setActionsSlot} className="flex shrink-0 items-center gap-1 border-b border-line" />
       </div>
       <div className="min-h-0 flex-1">
         {tab.value === 'directory' ? <Directory actionsSlot={actionsSlot} />

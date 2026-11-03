@@ -9,8 +9,8 @@
 .insight-toolbar h1 { font-size: 18px; font-weight: 650; margin-right: auto; }
 .insight-heading { display: flex; align-items: center; margin-right: auto; min-width: 0; }.insight-toolbar .insight-heading h1 { width: auto; margin-right: 0; }
 .insight-live-badge { display: inline-block; margin-left: 8px; padding: 3px 7px; border-radius: 4px; font-size: 10px; font-weight: 500; color: #076c4e; background: #e5f6ed; }
-.insight-demo-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; white-space: nowrap; }
-.insight-toolbar .insight-demo-toggle input { width: 15px; height: 15px; accent-color: #155ad6; }
+.insight-demo-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; line-height: 1; white-space: nowrap; }
+.insight-toolbar .insight-demo-toggle input { width: 15px; height: 15px; margin: 0; flex: none; accent-color: #155ad6; }
 .insight-demo-badge { display: inline-block; vertical-align: middle; margin-left: 8px; padding: 3px 7px; border-radius: 4px; font-size: 10px; font-weight: 500; color: #98601b; background: #fff2d7; }
 .insight-record-button { text-align: left; }.insight-record-button:hover { color: #155ad6; text-decoration: underline; }
 .insight-demo-preview { padding: 0; }.insight-demo-preview dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; margin-top: 12px; }.insight-demo-preview dt { font-size: 11px; color: var(--color-muted, #667a96); }.insight-demo-preview dd { margin: 2px 0 0; overflow-wrap: anywhere; font-size: 13px; }.insight-demo-preview ul { display: grid; gap: 12px; padding: 20px 0; }

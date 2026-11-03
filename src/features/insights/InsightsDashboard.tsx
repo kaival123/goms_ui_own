@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Typewriter } from '@/components/ui/Typewriter'
+import { ShimmerText } from '@/components/ui/Skeleton'
 import { Link, useSearchParams } from 'react-router-dom'
 import { BID_STAGE_MAP, PIPELINE_STAGE_MAP, computeInsights, insightIsOpen, type InsightGroup, type InsightRecord, type InsightTrend } from '@goms/domain'
 import { useInsights } from '@/lib/api'
@@ -113,7 +113,7 @@ export function Insights() {
         {(filters.vertical || stateCode !== undefined || filters.search || months !== 12) && <button title="Clear filters" aria-label="Clear insights filters" className="insight-icon-button" onClick={clearFilters}><Icon name="X"/></button>}
       </div><div className="insight-toolbar-actions"><button title="Refresh insights" aria-label="Refresh insights" disabled={query.isFetching} onClick={refresh}><Icon name={query.isFetching ? 'Loader' : 'RotateCcw'} size={15}/></button><button onClick={() => { if (demo) changeData(false); shell.openImport() }} title={demo ? 'Import into live data' : 'Import'}><Icon name="Upload" size={14}/>Import</button>{tree('accountMapping.insights', 'download') && <button onClick={() => void exportData()} disabled={!data}><Icon name="Download" size={14}/>Export</button>}<StudioMenu/></div></header>
       {exportError && <div role="alert" className="insight-error">{exportError}</div>}
-      {query.isLoading ? <div role="status" className="insight-loading"><Typewriter text="Loading insights…"/></div> : query.isError ? <div role="alert" className="insight-error">Insights could not be loaded. Check your access and connection. <button onClick={() => void query.refetch()}>Retry</button></div> : data && <div className="insight-body">
+      {query.isLoading ? <div role="status" className="insight-loading"><ShimmerText>Loading insights…</ShimmerText></div> : query.isError ? <div role="alert" className="insight-error">Insights could not be loaded. Check your access and connection. <button onClick={() => void query.refetch()}>Retry</button></div> : data && <div className="insight-body">
         <section className="insight-kpis" aria-label="Headline statistics">{[
           { label: 'Total Pipeline', icon: 'BarChart3', value: money(data.metrics.pipeline), current: data.metrics.pipeline, previous: data.previous?.pipeline ?? null, series: data.trend.map(t => t.pipeline), records: data.records.filter(insightIsOpen) },
           { label: 'Weighted Pipeline', icon: 'Target', value: money(data.metrics.weighted), current: data.metrics.weighted, previous: data.previous?.weighted ?? null, series: data.trend.map(t => t.weighted), records: data.records.filter(insightIsOpen) },

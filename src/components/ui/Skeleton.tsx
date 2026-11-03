@@ -1,7 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { cn } from '@/lib/utils'
-import { Typewriter } from './Typewriter'
 
 /** One placeholder block with a light sweeping shimmer (see `.skeleton` in index.css).
  *  Colors come from theme tokens, so it works in light and dark. Decorative: wrap a set of
@@ -10,7 +9,13 @@ export function Skeleton({ className, style }: { className?: string; style?: CSS
   return <div aria-hidden className={cn('skeleton h-3 w-full', className)} style={style} />
 }
 
-/** Announces the loading state once (`label` is read out, and typed out above the placeholder unless `caption` is off) and fades the whole
+/** Loading text with a highlight sweeping across the letters (see `.shimmer-text` in index.css). Takes the colour of
+ *  the surrounding text, so it works in light and dark and on any background. */
+export function ShimmerText({ children, className }: { children: ReactNode; className?: string }) {
+  return <span className={cn('shimmer-text', className)}>{children}</span>
+}
+
+/** Announces the loading state once (`label` is read out, and shown shimmering above the placeholder unless `caption` is off) and fades the whole
  *  placeholder in after a short delay, so fast loads never flash a skeleton. */
 export function SkeletonGroup({ label, className, caption = true, children }: { label: string; className?: string; caption?: boolean; children: ReactNode }) {
   return (
@@ -22,8 +27,9 @@ export function SkeletonGroup({ label, className, caption = true, children }: { 
       animate={{ opacity: 1 }}
       transition={{ duration: 0.25, delay: 0.12, ease: 'easeOut' }}
     >
-      <span className="sr-only">{label}</span>
-      {caption && <div aria-hidden className="mb-3 text-xs font-medium text-muted"><Typewriter text={label} /></div>}
+      {caption
+        ? <div className="mb-3 text-xs font-medium text-muted"><ShimmerText>{label}</ShimmerText></div>
+        : <span className="sr-only">{label}</span>}
       {children}
     </motion.div>
   )

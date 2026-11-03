@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Typewriter } from '@/components/ui/Typewriter'
+import { SkeletonGroup, SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { Icon } from '@/components/ui/Icon'
 import { useSynopsis } from '../api'
@@ -22,7 +22,7 @@ export function RfpTimelineTab({ bidId, onOpenGeneral, now }: Props) {
   const timeline = useMemo(() => buildRfpTimeline(documentToGeneral(query.data?.document)), [query.data])
   const today = useMemo(() => now ?? new Date(), [now])
 
-  if (query.isLoading) return <div role="status" className="p-6 text-sm text-muted"><Typewriter text="Loading RFP timeline…" /></div>
+  if (query.isLoading) return <SkeletonGroup label="Loading RFP timeline…" className="p-6"><SkeletonRows rows={5} /></SkeletonGroup>
   if (query.isError) {
     return (
       <div role="alert" className="space-y-2 p-6 text-sm text-crimson">

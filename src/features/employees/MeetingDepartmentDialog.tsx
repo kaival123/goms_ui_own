@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Typewriter } from '@/components/ui/Typewriter'
+import { ShimmerText } from '@/components/ui/Skeleton'
 import { useNodeMutations, useStates } from '@/lib/api'
 import { useAllowed } from '@/lib/permissions'
 import { auth } from '@/lib/firebaseAuth'
@@ -41,7 +41,7 @@ export function MeetingDepartmentDialog({ onBack, onCreated }: { onBack: () => v
       <Field label="Department name" required><Input autoFocus value={name} onChange={event => setName(event.target.value)} /></Field>
       <Field label="State / Central Ministries" required><Select value={stateCode} onChange={event => setStateCode(event.target.value)}><option value="">Select location</option><option value={CENTRAL_STATE_CODE}>Central Ministries</option>{states.filter(state => state.code !== CENTRAL_STATE_CODE).map(state => <option key={state.code} value={state.code}>{state.name}</option>)}</Select></Field>
     </div>
-    {isLoading && <p role="status" className="mt-3 text-xs text-muted"><Typewriter text="Loading states…" /></p>}
+    {isLoading && <p role="status" className="mt-3 text-xs text-muted"><ShimmerText>Loading states…</ShimmerText></p>}
     <p role="status" className="mt-3 text-xs text-muted">{draft.error ? 'Draft could not be saved on this device.' : 'Department details are saved as a draft as you type.'}</p>
     {error && <p role="alert" className="mt-3 text-sm text-crimson">{error}</p>}
   </Dialog>

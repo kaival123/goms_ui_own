@@ -92,7 +92,7 @@ export function NewEventForm({ onCreated, onCancel }: { onCreated: (e: Marketing
   }
 
   return (
-    <section className="max-w-6xl space-y-3 rounded-xl border border-line bg-white p-5">
+    <section className="w-full space-y-2 rounded-xl border border-line bg-white p-4 sm:p-4">
       <h1 className="text-lg font-semibold text-ink-900">New event</h1>
       <EventDetailsFields value={info} onChange={setInfo} />
       <Field label="Participant list" required>
@@ -117,7 +117,7 @@ export function NewEventForm({ onCreated, onCancel }: { onCreated: (e: Marketing
             const on = candidates.filter((i) => picked.has(i)).length
             return (
               <li key={key} className="border-b border-line last:border-b-0">
-                <div className="sticky top-0 z-[1] grid items-center gap-2 bg-paper px-3 py-1.5 sm:grid-cols-[auto_1fr_minmax(0,22rem)]">
+                <div className="sticky top-0 z-[1] grid items-center gap-2 bg-paper px-2.5 py-1 sm:grid-cols-[auto_1fr_minmax(0,22rem)]">
                   <Checkbox aria-label={`Add everyone from ${first.dept || 'no department'}`} disabled={!candidates.length}
                     checked={!!candidates.length && on === candidates.length} indeterminate={on > 0 && on < candidates.length}
                     onChange={(v) => toggle(candidates, v)} />
@@ -129,9 +129,9 @@ export function NewEventForm({ onCreated, onCancel }: { onCreated: (e: Marketing
                     placeholder={newDeptState(first) != null ? `New: ${first.dept} · ${first.state}` : 'Choose a Directory department…'}
                     onChange={(v) => setDeptMap((m) => new Map(m).set(key, v))} options={deptOptions} />
                 </div>
-                <ul className="grid gap-x-4 py-1 pl-9 pr-3 sm:grid-cols-2 xl:grid-cols-3">
+                <ul className="grid gap-x-3 py-0.5 pl-7 pr-2.5 sm:grid-cols-2 xl:grid-cols-3">
                   {idx.map((i) => (
-                    <li key={i} className="flex min-w-0 items-center gap-3 py-1">
+                    <li key={i} className="flex min-w-0 items-center gap-2 py-0.5">
                       <Checkbox aria-label={`Add ${participants[i].name}`} disabled={!addable(i)} checked={addable(i) && picked.has(i)} onChange={(v) => toggle([i], v)} />
                       <PersonName person={{ id: existing[i]?.id, name: participants[i].name, photoUrl: existing[i]?.photoUrl }} size="xs" subtitle={participants[i].designation} className="flex-1" />
                       {existing[i] && <span className="text-[12px] text-muted">Already in Directory</span>}

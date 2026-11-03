@@ -353,6 +353,26 @@
   background: rgb(var(--c-ink-900) / 0.1);
 }
 
+/* First-visit page skeleton (components/FirstVisitSkeleton.tsx): the page's own content, drawn as shimmering shapes.
+   Text turns transparent and every text-bearing element becomes a tinted bar with a sweeping highlight, so each page
+   gets a skeleton that matches its real text and layout. Icons and images are hidden; the page can't be clicked. Empty fixed/absolute layers (dialog wrappers, scrims) are
+   left alone so no tint covers the screen. */
+.page-skeleton { pointer-events: none; user-select: none; }
+.page-skeleton * { -webkit-text-fill-color: transparent !important; text-shadow: none !important; caret-color: transparent; }
+.page-skeleton :is(img, svg, canvas, video, iframe) { visibility: hidden !important; }
+.page-skeleton :is(h1, h2, h3, h4, h5, h6, p, label, a, button, li, td, th, span, div, strong, b, em, small, legend, dt, dd, option):not(:has(*), .fixed, .absolute, [data-canvas-ui]),
+.page-skeleton :is(h1, h2, h3, h4, h5, h6, p, label) {
+  background-image: linear-gradient(90deg, rgb(var(--c-ink-900) / 0.07) 30%, rgb(var(--c-ink-900) / 0.15) 50%, rgb(var(--c-ink-900) / 0.07) 70%) !important;
+  background-size: 250% 100% !important;
+  background-color: transparent !important;
+  border-radius: 6px;
+  animation: page-skeleton-sweep 1.5s linear infinite !important;
+}
+@keyframes page-skeleton-sweep { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+.page-skeleton-reveal { animation: page-skeleton-reveal 450ms ease-out both; }
+@keyframes page-skeleton-reveal { from { opacity: 0.35; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .page-skeleton :is(h1, h2, h3, h4, h5, h6, p, label, a, button, li, td, th, span, div):not(:has(*)) { animation: none !important; } }
+
 /* Dropdowns. Every single-choice <select> in the app gets the same look as the app's own pickers: a field with a
    turning chevron and a glowing focus, and an option list that is a rounded panel which drops in, with a tint on the
    option under the pointer and a bold, checked current choice.
@@ -483,31 +503,6 @@
   select optgroup { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: rgb(var(--c-muted)); }
 }
 
-/* Entrance motion. A page fades and rises as it opens; the children of an .enter-stagger container rise in one after
-   another (cards, tiles, table rows). Both stand still for people who ask for reduced motion. */
-@keyframes page-enter {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: none; }
-}
-@keyframes rise-in {
-  from { opacity: 0; transform: translateY(14px) scale(0.985); }
-  to { opacity: 1; transform: none; }
-}
-.page-enter { animation: page-enter 420ms cubic-bezier(0.16, 1, 0.3, 1) both; }
-.enter-stagger > * { animation: rise-in 520ms cubic-bezier(0.16, 1, 0.3, 1) both; }
-.enter-stagger > :nth-child(2) { animation-delay: 60ms; }
-.enter-stagger > :nth-child(3) { animation-delay: 120ms; }
-.enter-stagger > :nth-child(4) { animation-delay: 180ms; }
-.enter-stagger > :nth-child(5) { animation-delay: 240ms; }
-.enter-stagger > :nth-child(6) { animation-delay: 290ms; }
-.enter-stagger > :nth-child(7) { animation-delay: 340ms; }
-.enter-stagger > :nth-child(8) { animation-delay: 390ms; }
-.enter-stagger > :nth-child(9) { animation-delay: 430ms; }
-.enter-stagger > :nth-child(n + 10) { animation-delay: 470ms; }
-@media (prefers-reduced-motion: reduce) {
-  .page-enter, .enter-stagger > * { animation: none; }
-}
-
 /* Tables that fold. useFoldingTable marks the columns that no longer fit with data-folded: they fade out and leave the
    layout, and a row's arrow (at the right of its first cell) opens the folded values under it as labelled details. */
 :is(.fold-table, [data-fold-table]) { min-width: 0 !important; }
@@ -627,7 +622,7 @@
 @media (prefers-reduced-motion: reduce) { .table-splitter, .table-splitter > i { transition-duration: 0.01ms; } }
 
 /* Cards (marked by lib/cardMotion.ts): a small lift on hover and a slight press, like the reference demo. `translate`
-   and `scale` are independent of `transform`, so they never fight the entrance animation or a card's own transform. */
+   and `scale` are independent of `transform`, so they never fight a card's own transform. */
 [data-card] { transition: translate 360ms cubic-bezier(0.16, 1, 0.3, 1), scale 200ms ease-out, box-shadow 360ms cubic-bezier(0.16, 1, 0.3, 1); }
 @media (hover: hover) and (pointer: fine) {
   [data-card='sm']:hover { translate: 0 -3px; box-shadow: 0 14px 30px -14px rgb(var(--c-shadow) / 0.28); }
@@ -638,23 +633,43 @@
   [data-card='sm']:hover { translate: none; }
 }
 
-/* <Typewriter>: letters drop in one after another, then the caret blinks out. */
-.typewriter { display: inline-flex; align-items: center; white-space: pre; }
-.typewriter-char { display: inline-block; opacity: 0; transform: translateY(0.45em); animation: typewriter-char 380ms cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-.typewriter-caret { width: 2px; height: 1.05em; margin-left: 2px; background: currentColor; opacity: 0; animation: typewriter-caret 1.1s steps(1) 2 forwards; }
-@keyframes typewriter-char { to { opacity: 1; transform: none; } }
-@keyframes typewriter-caret { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+/* <Typewriter>: letters type in place one after another behind a blinking, softly glowing caret. The caret takes no
+   width (it sits over the gap between typed and untyped text), so nothing shifts as it moves. */
+.typewriter { display: inline; white-space: pre-wrap; }
+/* <ShimmerText>: dim text with a brighter band sweeping across it. Uses currentColor, so it follows the theme. */
+.shimmer-text {
+  -webkit-text-fill-color: transparent;
+  background-image: linear-gradient(105deg, color-mix(in srgb, currentColor 45%, transparent) 38%, currentColor 50%, color-mix(in srgb, currentColor 45%, transparent) 62%);
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: shimmer-text 1.8s linear infinite;
+}
+@keyframes shimmer-text { from { background-position: 130% 0; } to { background-position: -30% 0; } }
+@media (prefers-reduced-motion: reduce) { .shimmer-text { -webkit-text-fill-color: currentColor; background: none; animation: none; opacity: 0.7; } }
+
+.typewriter-caret { position: relative; display: inline-block; width: 0; height: 1em; vertical-align: text-bottom; }
+.typewriter-caret::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0.05em;
+  width: 3px;
+  height: 0.95em;
+  border-radius: 1px;
+  /* The caret takes the text's own colour, so it follows the light/dark theme with it. */
+  background: currentColor;
+  box-shadow: 0 0 8px color-mix(in srgb, currentColor 70%, transparent), 0 0 20px color-mix(in srgb, currentColor 35%, transparent);
+  animation: typewriter-blink 0.7s infinite;
+}
+@keyframes typewriter-blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .typewriter-char { opacity: 1; transform: none; animation: none; }
   .typewriter-caret { display: none; }
 }
 
-/* Rows that sharpen in one after another, top to bottom: each row (and then its cells, left to right) fades up out of a
-   blur. A row's place in the order is its `--i` (set by the list). Used by the Document Maker file list. */
-.row-reveal > [role='row'] { animation: row-reveal 720ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i, 0) * 70ms); }
-.row-reveal > [role='row'] > [role='cell'] { animation: row-reveal 640ms cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--i, 0) * 70ms + 90ms); }
-.row-reveal > [role='row'] > [role='cell']:nth-child(2) { animation-delay: calc(var(--i, 0) * 70ms + 150ms); }
-.row-reveal > [role='row'] > [role='cell']:nth-child(3) { animation-delay: calc(var(--i, 0) * 70ms + 210ms); }
-.row-reveal > [role='row'] > [role='cell']:nth-child(n + 4) { animation-delay: calc(var(--i, 0) * 70ms + 270ms); }
-@keyframes row-reveal { from { opacity: 0; filter: blur(8px); transform: translateY(8px); } to { opacity: 1; filter: blur(0); transform: none; } }
-@media (prefers-reduced-motion: reduce) { .row-reveal > [role='row'], .row-reveal > [role='row'] > [role='cell'] { animation: none; } }
+/* Rows fade up one after another, top to bottom (a row's place in the order is its `--i`, set by the list; used by the
+   Document Maker file list). Smooth by construction: only opacity and transform animate, so the browser runs it on the
+   compositor with no repaint; there is no blur, and one animation per row rather than per cell. */
+.row-reveal > [role='row'] { animation: row-reveal 900ms cubic-bezier(0.22, 1, 0.36, 1) backwards; animation-delay: calc(var(--i, 0) * 120ms); }
+@keyframes row-reveal { from { opacity: 0; transform: translate3d(0, 14px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
+@media (prefers-reduced-motion: reduce) { .row-reveal > [role='row'] { animation: none; } }

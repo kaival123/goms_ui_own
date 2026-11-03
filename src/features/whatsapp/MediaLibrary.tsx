@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Typewriter } from '@/components/ui/Typewriter'
+import { ShimmerText } from '@/components/ui/Skeleton'
 import { createPortal } from 'react-dom'
 import { useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
@@ -234,7 +234,7 @@ export function MediaLibrary({ sessionId, chats, tags, initialTags, pictures, ow
         <footer className="flex shrink-0 items-center gap-2 border-t border-line px-4 py-2.5 text-[11px] text-muted sm:px-6" role="status">
           {loading && <Icon name="Loader" size={13} className="animate-spin" />}
           <span>{loading ? `Loading chats ${completed}/${chats.length}` : `${shown.length} ${shown.length === 1 ? 'item' : 'items'}`}</span>
-          {busy && <span className="ml-2 flex items-center gap-1"><Icon name="Loader" size={12} className="animate-spin" /><Typewriter text="Opening file…" /></span>}
+          {busy && <span className="ml-2 flex items-center gap-1"><Icon name="Loader" size={12} className="animate-spin" /><ShimmerText>Opening file…</ShimmerText></span>}
           <span className="ml-auto text-right">Recent 50 messages per chat + saved opportunity attachments</span>
         </footer>
       </div>

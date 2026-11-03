@@ -12,6 +12,7 @@ import { MobileNavDrawer } from '@/components/MobileNavDrawer'
 import { CommandPalette } from '@/components/CommandPalette'
 import { GlobalFab } from '@/components/GlobalFab'
 import { RouteFallback } from '@/components/RouteFallback'
+import { FirstVisitSkeleton } from '@/components/FirstVisitSkeleton'
 import { ImportDialog } from '@/features/import/ImportDialog'
 import { ExportDialog } from '@/features/import/ExportDialog'
 import { ToastProvider } from '@/components/ui/Toast'
@@ -220,9 +221,9 @@ export function AppLayout() {
               {/* `pb-14` matches SecondaryNav's fixed mobile bar height. */}
               <main className={cn('min-h-0 flex-1 overflow-hidden', navExpanded && 'pb-14 lg:pb-0')}>
                 <Suspense fallback={<RouteFallback />}>
-                  <div key={location.pathname.split('/')[1] ?? ''} className="page-enter h-full">
+                  <FirstVisitSkeleton key={location.pathname.split('/')[1] ?? ''} routeKey={location.pathname.split('/')[1] ?? ''} className="h-full">
                     <Outlet />
-                  </div>
+                  </FirstVisitSkeleton>
                 </Suspense>
               </main>
             </div>

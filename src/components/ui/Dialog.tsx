@@ -19,6 +19,8 @@ interface Props {
   children: ReactNode
   footer?: ReactNode
   size?: 'md' | 'lg' | 'xl'
+  /** Desktop: cap the dialog at the window height and scroll its body (default). Pass false to let it grow the page. */
+  fitViewport?: boolean
   className?: string
 }
 
@@ -32,7 +34,7 @@ const SIZE_CLASS: Record<NonNullable<Props['size']>, string> = {
   xl: 'lg:max-w-4xl',
 }
 
-export function Dialog({ open, onClose, title, titleNode, eyebrow, headerAside, description, children, footer, size = 'md', className }: Props) {
+export function Dialog({ open, onClose, title, titleNode, eyebrow, headerAside, description, children, footer, size = 'md', fitViewport = true, className }: Props) {
   // Below `lg`, every dialog built on this component presents as a bottom
   // sheet (full-bleed width, anchored to the bottom edge, internal scroll
   // capped at 90vh) instead of the small centered modal — an additive
@@ -78,7 +80,8 @@ export function Dialog({ open, onClose, title, titleNode, eyebrow, headerAside, 
               aria-modal="true"
               aria-label={title}
               className={cn(
-                'relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-paper shadow-pop lg:mt-8 lg:max-h-none lg:overflow-visible lg:rounded-2xl',
+                'relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-paper shadow-pop lg:mt-8 lg:rounded-2xl',
+                fitViewport ? 'lg:max-h-[calc(100dvh-6rem)]' : 'lg:max-h-none lg:overflow-visible',
                 SIZE_CLASS[size],
                 className,
               )}
@@ -104,7 +107,7 @@ export function Dialog({ open, onClose, title, titleNode, eyebrow, headerAside, 
                   </button>
                 </div>
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 lg:overflow-visible">{children}</div>
+              <div className={cn('min-h-0 flex-1 overflow-y-auto px-6 py-5', !fitViewport && 'lg:overflow-visible')}>{children}</div>
               {footer && <div className="flex shrink-0 justify-end gap-2 border-t border-line px-6 py-4">{footer}</div>}
             </motion.div>
           </>

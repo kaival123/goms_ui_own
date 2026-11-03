@@ -1,5 +1,4 @@
-import { Skeleton, SkeletonGroup } from '@/components/ui/Skeleton'
-import { Typewriter } from '@/components/ui/Typewriter'
+import { ShimmerText, Skeleton, SkeletonGroup } from '@/components/ui/Skeleton'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useQueries, useQuery } from '@tanstack/react-query'
@@ -375,7 +374,7 @@ function Preparing({ converting }: { converting: boolean }) {
   return (
     <div className="flex w-72 flex-col items-center gap-3 text-center">
       <Icon name="Loader" size={26} className="animate-spin text-white/80" />
-      <p className="text-white/85"><Typewriter text={converting ? 'Preparing the preview…' : 'Opening…'} /></p>
+      <p className="text-white/85"><ShimmerText>{converting ? 'Preparing the preview…' : 'Opening…'}</ShimmerText></p>
       <div className="h-1 w-full overflow-hidden rounded-full bg-white/15">
         <motion.div className="h-full w-2/5 rounded-full bg-emerald-600" animate={{ x: ['-100%', '250%'] }} transition={{ repeat: Infinity, duration: 1.3, ease: 'easeInOut' }} />
       </div>

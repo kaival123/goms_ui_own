@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Typewriter } from '@/components/ui/Typewriter'
+import { SkeletonGroup, SkeletonRows } from '@/components/ui/Skeleton'
 import { createPortal } from 'react-dom'
 import { Check, Loader2, Pencil, Plus, RotateCcw } from 'lucide-react'
 import type { BidCustomField, BidGridRow } from '@/lib/types'
@@ -26,7 +26,7 @@ export function GeneralTab({ bidId, module = 'opp.bidTracker', actionsTarget }: 
   const synopsis = useSynopsis(bidId, 'general')
   const rows = useBidsForGrid()
   const fields = useBidCustomFields()
-  if (synopsis.isLoading || rows.isLoading || fields.isLoading) return <div role="status" className="p-6 text-sm text-muted"><Typewriter text="Loading General…" /></div>
+  if (synopsis.isLoading || rows.isLoading || fields.isLoading) return <SkeletonGroup label="Loading General…" className="p-6"><SkeletonRows rows={5} /></SkeletonGroup>
   const error = synopsis.error ?? rows.error ?? fields.error
   if (error) return <div role="alert" className="space-y-2 p-6 text-sm text-crimson"><p>{error.message}</p><Button size="sm" onClick={() => { void synopsis.refetch(); void rows.refetch(); void fields.refetch() }}>Retry</Button></div>
   const row = rows.data?.find(candidate => candidate.id === bidId)

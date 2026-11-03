@@ -98,7 +98,7 @@ export function Dashboard({ onCreateBoq, onNavigate }: {
         </Button>
       </div>
 
-      <div className="enter-stagger grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <KpiCard label="Draft" value={String(metrics?.draft ?? 0)} icon="FileText" active={selected === 'draft'} onClick={() => setSelected('draft')} />
         <KpiCard label="Pending Approval" value={String(metrics?.pendingApproval ?? 0)} icon="Clock" tone="bg-amber-50 text-amber-700" active={selected === 'pendingApproval'} onClick={() => setSelected('pendingApproval')} />
         <KpiCard label="Approved" value={String(metrics?.approved ?? 0)} icon="Check" tone="bg-emerald-50 text-emerald-700" active={selected === 'approved'} onClick={() => setSelected('approved')} />

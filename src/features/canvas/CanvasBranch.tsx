@@ -205,8 +205,11 @@ export function CanvasBranch({ item, depth, parentKey, controlled }: {
   const setRef = useCallback((el: HTMLElement | null) => canvas.setCardRef(key, el), [canvas, key])
 
   return (
-    <div className="flex flex-col items-center">
+    // A child branch spans its parent's two grid rows (card, subtree) as a subgrid, so every card in a sibling row
+    // shares one height and its expand chevron sits on the same line, whatever the card's content.
+    <div className={parentKey ? 'row-span-2 grid grid-rows-subgrid justify-items-center' : 'flex flex-col items-center'}>
       <div
+        className="flex"
         ref={setRef}
         data-card-key={key}
         draggable={canDrag}
@@ -255,7 +258,7 @@ export function CanvasBranch({ item, depth, parentKey, controlled }: {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="flex items-start gap-10 pt-12"
+            className="row-start-2 grid grid-flow-col grid-rows-[auto_auto] gap-x-10 pt-12"
           >
             {childItems.map((ci) => (
               <CanvasBranch key={itemKey(ci)} item={ci} depth={depth + 1} parentKey={key} />
@@ -267,7 +270,7 @@ export function CanvasBranch({ item, depth, parentKey, controlled }: {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="pt-8 text-[12px] italic text-muted"
+            className="row-start-2 pt-8 text-[12px] italic text-muted"
           >
             Nothing here yet
           </motion.p>

@@ -12,7 +12,7 @@ export function NewFileTiles({ onCreate, onUpload, busy }: {
   return (
     <section aria-labelledby="dm-new-heading" className="space-y-3">
       <h2 id="dm-new-heading" className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">Start a new file</h2>
-      <div className="enter-stagger grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {MAKER_KIND_ORDER.map((kind) => {
           const meta = KIND_META[kind]
           return (

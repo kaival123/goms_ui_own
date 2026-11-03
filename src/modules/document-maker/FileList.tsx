@@ -65,6 +65,13 @@ export function FileList({ files, onAction, onOpen, can = () => true }: {
   const start = (current - 1) * pageSize
   const pageFiles = files.slice(start, start + pageSize)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // The page's files grouped by kind; a group's header folds and unfolds its rows.
+  const [tableOpen, setTableOpen] = useState(true)
+  // Drag the table's right edge to narrow it: columns fold away, last first, into the file's second line.
+  const [folded, setFolded] = useState<Set<string>>(new Set())
+  const kinds = [...new Set(pageFiles.map((d) => d.kind))]
+  const toggleKind = (kind: string) => setFolded((f) => { const n = new Set(f); if (!n.delete(kind)) n.add(kind); return n })
+  const ordered = kinds.flatMap((k) => [{ header: k } as const, ...(folded.has(k) ? [] : pageFiles.filter((d) => d.kind === k).map((doc) => ({ doc })))])
   // A new page starts at its top.
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = 0 }, [current, pageSize])
 
@@ -99,6 +106,14 @@ export function FileList({ files, onAction, onOpen, can = () => true }: {
 
   return (
     <div className="@container overflow-hidden rounded-2xl border border-line bg-white">
+    <button type="button" aria-expanded={tableOpen} onClick={() => setTableOpen((o) => !o)}
+      className={cn('flex w-full items-center gap-2 bg-panel/60 px-4 py-2.5 text-left text-[12px] font-semibold text-ink-700 hover:bg-ink-900/[0.04] focus-visible:focus-ring', tableOpen && 'border-b border-line')}>
+      <Icon name="ChevronDown" size={15} className={cn('transition-transform duration-300', !tableOpen && '-rotate-90')} />
+      Your files
+      <span className="rounded-full bg-white px-2 py-px text-[11px] font-medium tabular-nums text-muted">{files.length}</span>
+    </button>
+    <div className={cn('grid transition-[grid-template-rows] duration-300 ease-out', tableOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]')}>
+    <div className="min-h-0 overflow-hidden" inert={!tableOpen}>
     <div role="table" aria-label="Your files">
       {/* The rows scroll inside the table (the header stays put); the paginator sits below it. */}
       <div ref={scrollRef} className="max-h-[26rem] overflow-y-auto scrollbar-thin">
@@ -111,7 +126,23 @@ export function FileList({ files, onAction, onOpen, can = () => true }: {
         </div>
       </div>
       <div role="rowgroup" key={current} className="row-reveal">
-        {pageFiles.map((doc, index) => {
+        {ordered.map((entry, index) => {
+          if ('header' in entry) {
+            const kind = entry.header
+            const open = !folded.has(kind)
+            const count = pageFiles.filter((d) => d.kind === kind).length
+            return (
+              <div key={`group-${kind}`} className="border-b border-line bg-panel/40">
+                <button type="button" aria-expanded={open} onClick={() => toggleKind(kind)}
+                  className="flex w-full items-center gap-2 px-4 py-2 text-left text-[12px] font-semibold text-ink-700 hover:bg-ink-900/[0.04] focus-visible:focus-ring">
+                  <Icon name="ChevronDown" size={15} className={cn('transition-transform duration-200', !open && '-rotate-90')} />
+                  {KIND_META[kind].label}s
+                  <span className="rounded-full bg-white px-2 py-px text-[11px] font-medium tabular-nums text-muted">{count}</span>
+                </button>
+              </div>
+            )
+          }
+          const doc = entry.doc
           const meta = KIND_META[doc.kind]
           const allows = (action: FileAction) => can(action) && fileAllows(doc, action)
           return (
@@ -185,6 +216,8 @@ export function FileList({ files, onAction, onOpen, can = () => true }: {
       </div>
     </div>
     {pager}
+    </div>
+    </div>
     </div>
   )
 }

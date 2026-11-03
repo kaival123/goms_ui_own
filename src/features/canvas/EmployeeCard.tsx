@@ -47,7 +47,7 @@ export const EmployeeCard = forwardRef<HTMLDivElement, Props>(
         }}
         onClick={onSelect}
         className={cn(
-          'group relative flex w-[220px] cursor-grab items-start gap-2.5 rounded-card border px-3.5 py-3 shadow-panel transition-colors active:cursor-grabbing',
+          'group relative flex w-[220px] cursor-grab flex-col items-center gap-2 rounded-card border px-3.5 pb-5 pt-4 text-center shadow-panel transition-colors active:cursor-grabbing',
           vacant ? 'border-dashed bg-amber-100/40' : 'bg-white',
           selected
             ? cn(accent.border, 'ring-2', accent.ring)
@@ -56,13 +56,13 @@ export const EmployeeCard = forwardRef<HTMLDivElement, Props>(
           dragging && 'opacity-50',
         )}
       >
-        {/* 36px keeps the card's original footprint beside the 13px name + 11px designation. */}
+        {/* Avatar on top, the name + designation centred beneath it. */}
         <Avatar
           person={{ name: employee.name, photoUrl: employee.photoUrl, vacant }}
           size="sm"
           className="h-9 w-9 font-display text-[13px]"
         />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 w-full">
           {vacant ? (
             <>
               <div className="break-words text-[13px] font-semibold text-amber-600">Vacant position</div>
@@ -70,7 +70,7 @@ export const EmployeeCard = forwardRef<HTMLDivElement, Props>(
             </>
           ) : (
             <>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center justify-center gap-1.5">
                 <span className="break-words text-[13px] font-semibold text-ink-900">{employee.name}</span>
                 {isDeptHead && (
                   <span className="flex shrink-0 items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600">
@@ -85,7 +85,7 @@ export const EmployeeCard = forwardRef<HTMLDivElement, Props>(
           {!vacant && <div className="mt-1.5"><RelationshipSummary employee={employee} /></div>}
 
           {employee.charges.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
+            <div className="mt-1 flex flex-wrap justify-center gap-1">
               {employee.charges.slice(0, 2).map((c) => <ChargeBadge key={c.id} charge={c} />)}
               {employee.charges.length > 2 && (
                 <span className="text-[10px] text-muted">+{employee.charges.length - 2}</span>

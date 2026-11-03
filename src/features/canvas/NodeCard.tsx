@@ -81,17 +81,17 @@ export const NodeCard = forwardRef<HTMLDivElement, Props>(
         }}
         onClick={onSelect}
         className={cn(
-          'group relative flex w-[220px] cursor-grab flex-col gap-1.5 rounded-card border bg-white px-4 py-3 shadow-panel transition-colors active:cursor-grabbing',
+          'group relative flex w-[220px] cursor-grab flex-col items-center gap-2 rounded-card border bg-white px-4 pb-5 pt-4 text-center shadow-panel transition-colors active:cursor-grabbing',
           selected ? cn(accent.border, 'ring-2', accent.ring) : 'border-line hover:border-ink-600',
           dropActive && 'border-teal-600 ring-2 ring-teal-600',
           dragging && 'opacity-50',
         )}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-col items-center gap-2">
           <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', accent.chip)}>
             <Icon name={type?.icon ?? 'Hash'} size={16} />
           </span>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 w-full">
             {!isDepartment && <div className="eyebrow break-words text-[10px]">{type?.label}</div>}
             <div className="break-words text-[13px] font-semibold text-ink-900">
               {isDepartment ? `Department of ${node.name}` : node.name}
@@ -100,14 +100,14 @@ export const NodeCard = forwardRef<HTMLDivElement, Props>(
         </div>
 
         {(!isDepartment && !isBranch) || node.status === 'archived' ? (
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center justify-center gap-1.5">
             {!isDepartment && !isBranch && <CodeChip code={node.code} />}
             {node.status === 'archived' && <span className="text-[10px] font-medium text-crimson">Archived</span>}
           </div>
         ) : null}
 
         {heads && heads.length > 0 && (
-          <div className="flex items-center gap-1.5 break-words text-[11px] text-muted">
+          <div className="flex items-center justify-center gap-1.5 break-words text-[11px] text-muted">
             {/* Overlapping stack — one face per named head (the same two the text lists). */}
             <span className="flex shrink-0 -space-x-1.5">
               {heads.slice(0, 2).map((h, i) => (

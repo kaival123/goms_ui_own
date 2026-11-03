@@ -23,7 +23,7 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
 /** Fill for a "connected" state — a navy that sits alongside the ink/indigo
  *  palette. Used for the tooltip/legend swatches; the map paths use the same
  *  hex as literal Tailwind classes (`fill-[#1e3a8a]`), with `#15296b` as the
- *  matching darker navy for their hover fill and border. */
+ *  matching darker navy for their border and `#2c4fae` as the lighter hover fill. */
 const NAVY = '#1e3a8a'
 
 /** India's 8 union territories, by the name this dataset uses — everything
@@ -481,13 +481,13 @@ export function IndiaMap() {
             // stroke with an amber ring so it reads distinctly from hover (ink)
             // and the navy/teal status outlines.
             const baseFill = isHover
-              ? isConnected ? 'fill-[#15296b]' : 'fill-indigo'
+              ? isConnected ? 'fill-[#2c4fae]' : populated ? 'fill-[#7cc9bd]' : 'fill-[#8fb6ee]'
               : isConnected ? 'fill-[#1e3a8a]'
                 : populated ? 'fill-teal/20'
                   : 'fill-white'
             const baseStroke = isSelected
               ? 'stroke-amber'
-              : isHover ? 'stroke-ink-900'
+              : isHover ? 'stroke-[#15296b]'
                 : isConnected ? 'stroke-[#15296b]'
                   : populated ? 'stroke-teal-600'
                     : 'stroke-ink-600/50'
@@ -505,7 +505,7 @@ export function IndiaMap() {
                 onMouseLeave={() => setHoverNow(null)}
                 onClick={() => navigate(`/state/${f.code}`)}
                 className={cn('transition-[fill,stroke] duration-150', fillClass, strokeClass)}
-                strokeWidth={isSelected ? 2.2 : isHover ? 1.4 : 0.6}
+                strokeWidth={isSelected ? 2.2 : isHover ? 1.6 : 0.6}
               />
             )
           })}

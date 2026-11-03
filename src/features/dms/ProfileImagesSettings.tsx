@@ -1,5 +1,4 @@
-import { SkeletonGroup, SkeletonRows } from '@/components/ui/Skeleton'
-import { Typewriter } from '@/components/ui/Typewriter'
+import { ShimmerText, SkeletonGroup, SkeletonRows } from '@/components/ui/Skeleton'
 import { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ChevronRight, Folder } from 'lucide-react'
@@ -110,7 +109,7 @@ function ConnectedProfileImagesSettings() {
           <Button size="sm" variant="primary" disabled={!!busy || !canEdit || !!invalid || (!!folder && !status.data.accountEmail)} onClick={() => void run('save', async () => { const result = await profileImagesApi.save.mutate({ folder }); setDirty(false); setFolder(result.folderId); setFolderName(result.folderName); setEnteringLink(false); setLink(''); await refreshed(); setMessage(syncMessage(result)) })}>Save</Button>
           <Button size="sm" disabled={!!busy || !canEdit || dirty || !status.data.folderId || !status.data.accountEmail} onClick={() => void run('sync', async () => { const result = await profileImagesApi.sync.mutate(); await refreshed(); setMessage(syncMessage(result)) })}>Sync Now</Button>
         </div>
-        {busy && <p role="status" className="text-xs text-muted"><Typewriter text={busy === 'save' || busy === 'sync' ? 'Synchronizing Profile Images…' : busy === 'folders' ? 'Loading folders…' : 'Connecting to Google Drive…'} /></p>}
+        {busy && <p role="status" className="text-xs text-muted"><ShimmerText>{busy === 'save' || busy === 'sync' ? 'Synchronizing Profile Images…' : busy === 'folders' ? 'Loading folders…' : 'Connecting to Google Drive…'}</ShimmerText></p>}
         {message && <p role="status" className="text-sm text-ink">{message}</p>}
         <p className="text-xs text-muted">Photos are matched to Employees, Sales, team rosters and People contacts. Name each JPG, PNG or WebP exactly as the person's full name in GOMS, e.g. Shubham Mehra.png (capitals don't matter). People without a photo show their initials.</p>
         <p className="text-xs text-muted">Changes are checked incrementally every minute while the server runs. Sync Now refreshes employee photos after completion. Photos for people not yet in GOMS wait and appear automatically once the person is added.</p>

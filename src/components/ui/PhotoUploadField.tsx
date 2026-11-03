@@ -51,7 +51,7 @@ export function PhotoUploadField({ photoUrl, onChange, label = 'Profile Picture'
 
   return (
     <Field label={label} hint={hint}>
-      <div className="flex items-center gap-3" tabIndex={0} onPaste={onPhotoPaste} data-testid="profile-photo-dropzone">
+      <div className="flex items-center gap-5" tabIndex={0} onPaste={onPhotoPaste} data-testid="profile-photo-dropzone">
         {photoUrl ? (
           <span className="relative">
             <img src={photoUrl} alt="" className={`h-14 w-14 rounded-xl ${fit === 'contain' ? 'border border-line bg-white object-contain p-1' : 'object-cover'}`} />
@@ -65,8 +65,8 @@ export function PhotoUploadField({ photoUrl, onChange, label = 'Profile Picture'
             </button>
           </span>
         ) : (
-          <span className="flex h-14 w-14 items-center justify-center rounded-xl bg-panel text-muted">
-            <Icon name={placeholderIcon} size={18} />
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-panel text-muted shadow-[0_1px_3px_rgba(15,23,42,0.12)]">
+            <Icon name={placeholderIcon} size={16} />
           </span>
         )}
         <Button size="sm" onClick={() => photoRef.current?.click()}>

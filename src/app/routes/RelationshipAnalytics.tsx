@@ -48,7 +48,7 @@ export function RelationshipAnalytics() {
           transition={{ duration: 0.25 }}
           className="min-h-0 flex-1 space-y-4 overflow-y-auto scrollbar-thin px-4 py-4 sm:space-y-6 sm:px-6 sm:py-6"
         >
-          <section className="enter-stagger grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <StatCard icon="Users" tone="emerald" label="Connected officials" value={a.connected} sub={`${a.total} total`} />
             <StatCard icon="Star" tone="crimson" label="High-priority contacts" value={a.highPriority} />
             <StatCard icon="UserX" tone="amber" label="Vacant positions" value={a.vacant} />
